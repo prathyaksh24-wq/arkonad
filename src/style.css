@@ -1,0 +1,150 @@
+:root {
+  color-scheme: dark;
+  font-family: "Cascadia Mono", "Cascadia Code", Consolas, monospace;
+  background: #090b0e;
+  color: #e8ecef;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#app {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  overflow: hidden;
+  background: #090b0e;
+}
+
+button,
+input {
+  font: inherit;
+}
+
+.frame {
+  display: grid;
+  grid-template-rows: 38px minmax(0, 1fr) 28px;
+  width: 100%;
+  height: 100%;
+  background:
+    radial-gradient(circle at 15% -30%, rgba(255, 156, 74, 0.09), transparent 35%),
+    #090b0e;
+}
+
+.topbar,
+.bottombar {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  min-width: 0;
+  padding: 0 14px;
+  border-color: #202830;
+  color: #7e8a95;
+  font-size: 12px;
+}
+
+.topbar {
+  border-bottom: 1px solid #202830;
+}
+
+.bottombar {
+  justify-content: flex-start;
+  border-top: 1px solid #202830;
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.brand {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 8px;
+  color: #e8ecef;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+}
+
+.ember {
+  color: #ff9c4a;
+  font-size: 10px;
+  text-shadow: 0 0 10px rgba(255, 156, 74, 0.65);
+}
+
+.session-meta,
+.status,
+[data-cwd] {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-meta {
+  flex: 1 1 auto;
+}
+
+.status {
+  flex: 0 0 auto;
+  color: #ffcf70;
+}
+
+.status[data-state="ready"] {
+  color: #9ed67a;
+}
+
+.status[data-state="error"] {
+  color: #ff766b;
+}
+
+.status[data-state="stopped"] {
+  color: #68737d;
+}
+
+.terminal-shell {
+  position: relative;
+  min-height: 0;
+  padding: 12px 14px 8px;
+}
+
+.terminal {
+  width: 100%;
+  height: 100%;
+}
+
+.xterm {
+  height: 100%;
+}
+
+.xterm-viewport,
+.xterm-screen {
+  border-radius: 3px;
+}
+
+.error-panel {
+  position: absolute;
+  right: 18px;
+  bottom: 18px;
+  left: 18px;
+  padding: 10px 12px;
+  border: 1px solid rgba(255, 118, 107, 0.42);
+  border-radius: 3px;
+  background: rgba(53, 18, 20, 0.94);
+  color: #ffb3aa;
+  font-size: 12px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    transition-duration: 0.001ms !important;
+    animation-duration: 0.001ms !important;
+  }
+}

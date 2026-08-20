@@ -1,0 +1,17 @@
+[package]
+name = "arkonad"
+version = "0.1.0"
+description = "The terminal app store and runtime for terminal software."
+authors = ["Arkonad"]
+edition = "2021"
+rust-version = "1.80"
+build = "build.rs"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+portable-pty = "0.9.0"
+serde = { version = "1", features = ["derive"] }
+tauri = { version = "2.11.4", features = [] }
+tauri-plugin-clipboard-manager = "2.3.2"
