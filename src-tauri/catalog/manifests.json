@@ -1,0 +1,392 @@
+[
+  {
+    "schemaVersion": 1,
+    "id": "codex",
+    "name": "Codex",
+    "summary": "A coding agent that works from a terminal session.",
+    "category": "agent",
+    "publisher": "OpenAI",
+    "license": "See publisher terms",
+    "platforms": ["windows"],
+    "source": {
+      "kind": "repository",
+      "url": "https://github.com/openai/codex"
+    },
+    "lastMetadataRefresh": "2026-08-20",
+    "executableDetection": {
+      "commands": ["codex.exe", "codex"]
+    },
+    "versions": {
+      "latest": null,
+      "supported": [],
+      "verified": []
+    },
+    "installMethods": [
+      {
+        "id": "publisher",
+        "label": "Follow publisher install steps",
+        "kind": "manual",
+        "source": "https://github.com/openai/codex",
+        "command": null
+      }
+    ],
+    "prerequisites": [],
+    "launchProfiles": [
+      {
+        "id": "default",
+        "label": "Start Codex",
+        "executable": "codex.exe",
+        "arguments": [],
+        "shell": null,
+        "workingDirectory": null
+      }
+    ],
+    "dataLocations": [
+      {
+        "kind": "provider-defined",
+        "path": "See publisher documentation",
+        "description": "Codex owns its local configuration and session data."
+      }
+    ],
+    "networkExpectations": {
+      "required": true,
+      "summary": "Network access may be required by the provider; review provider terms before use.",
+      "endpoints": ["https://github.com/openai/codex"]
+    },
+    "optionalEnhancements": [],
+    "declaredCapabilities": [
+      {
+        "id": "terminal-agent",
+        "label": "Terminal agent",
+        "description": "Starts the publisher's coding-agent CLI in a terminal session."
+      }
+    ],
+    "verifiedCompatibility": [],
+    "managedByArkonad": false
+  },
+  {
+    "schemaVersion": 1,
+    "id": "claude-code",
+    "name": "Claude Code",
+    "summary": "A coding agent that runs as a terminal application.",
+    "category": "agent",
+    "publisher": "Anthropic",
+    "license": "See publisher terms",
+    "platforms": ["windows"],
+    "source": {
+      "kind": "repository",
+      "url": "https://github.com/anthropics/claude-code"
+    },
+    "lastMetadataRefresh": "2026-08-20",
+    "executableDetection": {
+      "commands": ["claude.exe", "claude"]
+    },
+    "versions": {
+      "latest": null,
+      "supported": [],
+      "verified": []
+    },
+    "installMethods": [
+      {
+        "id": "publisher",
+        "label": "Follow publisher install steps",
+        "kind": "manual",
+        "source": "https://github.com/anthropics/claude-code",
+        "command": null
+      }
+    ],
+    "prerequisites": [],
+    "launchProfiles": [
+      {
+        "id": "default",
+        "label": "Start Claude Code",
+        "executable": "claude.exe",
+        "arguments": [],
+        "shell": null,
+        "workingDirectory": null
+      }
+    ],
+    "dataLocations": [
+      {
+        "kind": "provider-defined",
+        "path": "See publisher documentation",
+        "description": "Claude Code owns its local configuration and session data."
+      }
+    ],
+    "networkExpectations": {
+      "required": true,
+      "summary": "Network access may be required by the provider; review provider terms before use.",
+      "endpoints": ["https://github.com/anthropics/claude-code"]
+    },
+    "optionalEnhancements": [],
+    "declaredCapabilities": [
+      {
+        "id": "terminal-agent",
+        "label": "Terminal agent",
+        "description": "Starts the publisher's coding-agent CLI in a terminal session."
+      }
+    ],
+    "verifiedCompatibility": [],
+    "managedByArkonad": false
+  },
+  {
+    "schemaVersion": 1,
+    "id": "opencode",
+    "name": "OpenCode",
+    "summary": "An open coding-agent terminal interface.",
+    "category": "agent",
+    "publisher": "OpenCode",
+    "license": "See publisher terms",
+    "platforms": ["windows"],
+    "source": {
+      "kind": "website",
+      "url": "https://opencode.ai"
+    },
+    "lastMetadataRefresh": "2026-08-20",
+    "executableDetection": {
+      "commands": ["opencode.exe", "opencode"]
+    },
+    "versions": {
+      "latest": null,
+      "supported": [],
+      "verified": []
+    },
+    "installMethods": [
+      {
+        "id": "publisher",
+        "label": "Follow publisher install steps",
+        "kind": "manual",
+        "source": "https://opencode.ai",
+        "command": null
+      }
+    ],
+    "prerequisites": [],
+    "launchProfiles": [
+      {
+        "id": "default",
+        "label": "Start OpenCode",
+        "executable": "opencode.exe",
+        "arguments": [],
+        "shell": null,
+        "workingDirectory": null
+      }
+    ],
+    "dataLocations": [
+      {
+        "kind": "provider-defined",
+        "path": "See publisher documentation",
+        "description": "OpenCode owns its local configuration and session data."
+      }
+    ],
+    "networkExpectations": {
+      "required": true,
+      "summary": "Network access depends on the selected provider and configuration.",
+      "endpoints": ["https://opencode.ai"]
+    },
+    "optionalEnhancements": [],
+    "declaredCapabilities": [
+      {
+        "id": "terminal-agent",
+        "label": "Terminal agent",
+        "description": "Starts the publisher's coding-agent CLI in a terminal session."
+      }
+    ],
+    "verifiedCompatibility": [],
+    "managedByArkonad": false
+  },
+  {
+    "schemaVersion": 1,
+    "id": "crush",
+    "name": "Crush",
+    "summary": "A terminal coding agent from Charmbracelet.",
+    "category": "agent",
+    "publisher": "Charmbracelet",
+    "license": "See publisher terms",
+    "platforms": ["windows"],
+    "source": {
+      "kind": "repository",
+      "url": "https://github.com/charmbracelet/crush"
+    },
+    "lastMetadataRefresh": "2026-08-20",
+    "executableDetection": {
+      "commands": ["crush.exe", "crush"]
+    },
+    "versions": {
+      "latest": null,
+      "supported": [],
+      "verified": []
+    },
+    "installMethods": [
+      {
+        "id": "publisher",
+        "label": "Follow publisher install steps",
+        "kind": "manual",
+        "source": "https://github.com/charmbracelet/crush",
+        "command": null
+      }
+    ],
+    "prerequisites": [],
+    "launchProfiles": [
+      {
+        "id": "default",
+        "label": "Start Crush",
+        "executable": "crush.exe",
+        "arguments": [],
+        "shell": null,
+        "workingDirectory": null
+      }
+    ],
+    "dataLocations": [
+      {
+        "kind": "provider-defined",
+        "path": "See publisher documentation",
+        "description": "Crush owns its local configuration and session data."
+      }
+    ],
+    "networkExpectations": {
+      "required": true,
+      "summary": "Network access depends on the selected model provider and configuration.",
+      "endpoints": ["https://github.com/charmbracelet/crush"]
+    },
+    "optionalEnhancements": [],
+    "declaredCapabilities": [
+      {
+        "id": "terminal-agent",
+        "label": "Terminal agent",
+        "description": "Starts the publisher's coding-agent CLI in a terminal session."
+      }
+    ],
+    "verifiedCompatibility": [],
+    "managedByArkonad": false
+  },
+  {
+    "schemaVersion": 1,
+    "id": "superfile",
+    "name": "Superfile",
+    "summary": "A terminal file manager for browsing local files.",
+    "category": "productivity",
+    "publisher": "Yorukot",
+    "license": "See publisher terms",
+    "platforms": ["windows"],
+    "source": {
+      "kind": "repository",
+      "url": "https://github.com/yorukot/superfile"
+    },
+    "lastMetadataRefresh": "2026-08-20",
+    "executableDetection": {
+      "commands": ["superfile.exe", "superfile"]
+    },
+    "versions": {
+      "latest": null,
+      "supported": [],
+      "verified": []
+    },
+    "installMethods": [
+      {
+        "id": "publisher",
+        "label": "Follow publisher install steps",
+        "kind": "manual",
+        "source": "https://github.com/yorukot/superfile",
+        "command": null
+      }
+    ],
+    "prerequisites": [],
+    "launchProfiles": [
+      {
+        "id": "default",
+        "label": "Start Superfile",
+        "executable": "superfile.exe",
+        "arguments": [],
+        "shell": null,
+        "workingDirectory": null
+      }
+    ],
+    "dataLocations": [
+      {
+        "kind": "provider-defined",
+        "path": "See publisher documentation",
+        "description": "Superfile owns its local configuration and cache data."
+      }
+    ],
+    "networkExpectations": {
+      "required": false,
+      "summary": "Browsing local files does not require network access; update behavior is provider-defined.",
+      "endpoints": ["https://github.com/yorukot/superfile"]
+    },
+    "optionalEnhancements": [],
+    "declaredCapabilities": [
+      {
+        "id": "file-navigation",
+        "label": "File navigation",
+        "description": "Starts the publisher's terminal file manager."
+      }
+    ],
+    "verifiedCompatibility": [],
+    "managedByArkonad": false
+  },
+  {
+    "schemaVersion": 1,
+    "id": "lazygit",
+    "name": "lazygit",
+    "summary": "A terminal interface for Git repositories.",
+    "category": "git",
+    "publisher": "Jesse Duffield",
+    "license": "See publisher terms",
+    "platforms": ["windows"],
+    "source": {
+      "kind": "repository",
+      "url": "https://github.com/jesseduffield/lazygit"
+    },
+    "lastMetadataRefresh": "2026-08-20",
+    "executableDetection": {
+      "commands": ["lazygit.exe", "lazygit"]
+    },
+    "versions": {
+      "latest": null,
+      "supported": [],
+      "verified": []
+    },
+    "installMethods": [
+      {
+        "id": "publisher",
+        "label": "Follow publisher install steps",
+        "kind": "manual",
+        "source": "https://github.com/jesseduffield/lazygit",
+        "command": null
+      }
+    ],
+    "prerequisites": [],
+    "launchProfiles": [
+      {
+        "id": "default",
+        "label": "Start lazygit",
+        "executable": "lazygit.exe",
+        "arguments": [],
+        "shell": null,
+        "workingDirectory": null
+      }
+    ],
+    "dataLocations": [
+      {
+        "kind": "provider-defined",
+        "path": "See publisher documentation",
+        "description": "lazygit uses the Git repository and its own local configuration."
+      }
+    ],
+    "networkExpectations": {
+      "required": false,
+      "summary": "Local Git operations do not require network access; remote operations are user initiated.",
+      "endpoints": ["https://github.com/jesseduffield/lazygit"]
+    },
+    "optionalEnhancements": [],
+    "declaredCapabilities": [
+      {
+        "id": "git-repository-view",
+        "label": "Git repository view",
+        "description": "Starts the publisher's terminal Git interface."
+      }
+    ],
+    "verifiedCompatibility": [],
+    "managedByArkonad": false
+  }
+]
