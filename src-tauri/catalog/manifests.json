@@ -53,7 +53,40 @@
       "summary": "Network access may be required by the provider; review provider terms before use.",
       "endpoints": ["https://github.com/openai/codex"]
     },
-    "optionalEnhancements": [],
+    "optionalEnhancements": [
+      {
+        "id": "wsl2",
+        "label": "WSL 2 Linux workspace",
+        "description": "Optional Linux workspace support for users who prefer to run Codex inside WSL. Native Windows use does not require it.",
+        "check": {
+          "command": ["wsl.exe", "--status"],
+          "stdoutContains": null
+        },
+        "command": ["wsl.exe", "--install", "--no-distribution"],
+        "source": "https://learn.microsoft.com/windows/wsl/basic-commands",
+        "privileges": "elevationRequired",
+        "rollbackLimits": "Arkonad will not remove shared WSL features automatically. Windows may require elevation or a restart."
+      },
+      {
+        "id": "ubuntu",
+        "label": "Ubuntu for WSL",
+        "description": "Optional Ubuntu distribution for a Linux workspace after WSL is available. Codex can still be used natively without it.",
+        "check": {
+          "command": ["wsl.exe", "--list", "--quiet"],
+          "stdoutContains": "Ubuntu"
+        },
+        "command": [
+          "wsl.exe",
+          "--install",
+          "--distribution",
+          "Ubuntu",
+          "--no-launch"
+        ],
+        "source": "https://learn.microsoft.com/windows/wsl/install",
+        "privileges": "mayElevate",
+        "rollbackLimits": "Arkonad will not unregister Ubuntu or delete its distribution files automatically."
+      }
+    ],
     "declaredCapabilities": [
       {
         "id": "terminal-agent",

@@ -139,6 +139,18 @@ select {
   font-size: 10px;
 }
 
+.apps-update-badge {
+  min-width: 16px;
+  padding: 1px 4px;
+  border: 1px solid #a85f2c;
+  border-radius: 8px;
+  background: #3a2113;
+  color: #ffcf70;
+  font-size: 9px;
+  line-height: 12px;
+  text-align: center;
+}
+
 .terminal-shell {
   position: relative;
   min-height: 0;

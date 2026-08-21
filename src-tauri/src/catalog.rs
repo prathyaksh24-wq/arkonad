@@ -159,7 +159,7 @@ pub struct Prerequisite {
     pub kind: String,
     #[serde(default)]
     pub optional: bool,
-    pub check: Option<String>,
+    pub check: Option<PrerequisiteCheck>,
     #[serde(default)]
     pub command: Option<Vec<String>>,
     #[serde(default)]
@@ -168,6 +168,14 @@ pub struct Prerequisite {
     pub privileges: PrivilegeRequirement,
     #[serde(default = "default_rollback_limits")]
     pub rollback_limits: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PrerequisiteCheck {
+    pub command: Vec<String>,
+    #[serde(default)]
+    pub stdout_contains: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -203,6 +211,16 @@ pub struct OptionalEnhancement {
     pub id: String,
     pub label: String,
     pub description: String,
+    #[serde(default)]
+    pub check: Option<PrerequisiteCheck>,
+    #[serde(default)]
+    pub command: Option<Vec<String>>,
+    #[serde(default)]
+    pub source: Option<String>,
+    #[serde(default)]
+    pub privileges: PrivilegeRequirement,
+    #[serde(default = "default_rollback_limits")]
+    pub rollback_limits: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -288,6 +306,14 @@ impl CatalogRuntime {
             manifests,
             detections: Mutex::new(HashMap::new()),
         })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_manifests_for_test(manifests: Vec<CatalogManifest>) -> Self {
+        Self {
+            manifests,
+            detections: Mutex::new(HashMap::new()),
+        }
     }
 
     pub(crate) fn manifest(&self, id: &str) -> Option<CatalogManifest> {
@@ -696,12 +722,11 @@ fn validate_prerequisites(prerequisites: &[Prerequisite], id: &str) -> Result<()
                 prerequisite.id
             ));
         }
-        if prerequisite
-            .check
-            .as_deref()
-            .is_some_and(|check| check.chars().any(char::is_control))
-        {
-            return Err(format!("manifest {id} has an invalid prerequisite check"));
+        if let Some(check) = &prerequisite.check {
+            validate_argv(&check.command, "prerequisites.check.command", id)?;
+            if let Some(marker) = &check.stdout_contains {
+                require_text(marker, "prerequisites.check.stdoutContains", id)?;
+            }
         }
         if let Some(command) = &prerequisite.command {
             validate_argv(command, "prerequisites.command", id)?;
@@ -796,6 +821,23 @@ fn validate_optional_enhancements(
                 enhancement.id
             ));
         }
+        if let Some(check) = &enhancement.check {
+            validate_argv(&check.command, "optionalEnhancements.check.command", id)?;
+            if let Some(marker) = &check.stdout_contains {
+                require_text(marker, "optionalEnhancements.check.stdoutContains", id)?;
+            }
+        }
+        if let Some(command) = &enhancement.command {
+            validate_argv(command, "optionalEnhancements.command", id)?;
+        }
+        if let Some(source) = &enhancement.source {
+            require_https_url(source, "optionalEnhancements.source", id)?;
+        }
+        require_text(
+            &enhancement.rollback_limits,
+            "optionalEnhancements.rollbackLimits",
+            id,
+        )?;
     }
     Ok(())
 }
