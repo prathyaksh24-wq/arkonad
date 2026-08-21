@@ -8,6 +8,18 @@ use std::{
 const MANIFEST_SCHEMA_VERSION: u32 = 1;
 const BUILTIN_MANIFESTS: &str = include_str!("../catalog/manifests.json");
 
+fn default_prerequisite_kind() -> String {
+    "runtime".to_owned()
+}
+
+fn default_data_expectations() -> String {
+    "The manifest does not declare additional data changes.".to_owned()
+}
+
+fn default_rollback_limits() -> String {
+    "Rollback limits are not declared; review the publisher instructions.".to_owned()
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CatalogManifest {
@@ -94,6 +106,16 @@ pub struct VersionInfo {
     pub verified: Vec<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum PrivilegeRequirement {
+    User,
+    MayElevate,
+    ElevationRequired,
+    #[default]
+    Unknown,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct InstallMethod {
@@ -101,7 +123,24 @@ pub struct InstallMethod {
     pub label: String,
     pub kind: String,
     pub source: String,
+    #[serde(default)]
     pub command: Option<Vec<String>>,
+    #[serde(default)]
+    pub package_id: Option<String>,
+    #[serde(default)]
+    pub version: Option<String>,
+    #[serde(default)]
+    pub privileges: PrivilegeRequirement,
+    #[serde(default)]
+    pub download_size_bytes: Option<u64>,
+    #[serde(default)]
+    pub affected_system_features: Vec<String>,
+    #[serde(default = "default_data_expectations")]
+    pub data_expectations: String,
+    #[serde(default = "default_rollback_limits")]
+    pub rollback_limits: String,
+    #[serde(default)]
+    pub verification_command: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -110,7 +149,19 @@ pub struct Prerequisite {
     pub id: String,
     pub label: String,
     pub description: String,
+    #[serde(default = "default_prerequisite_kind")]
+    pub kind: String,
+    #[serde(default)]
+    pub optional: bool,
     pub check: Option<String>,
+    #[serde(default)]
+    pub command: Option<Vec<String>>,
+    #[serde(default)]
+    pub source: Option<String>,
+    #[serde(default)]
+    pub privileges: PrivilegeRequirement,
+    #[serde(default = "default_rollback_limits")]
+    pub rollback_limits: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -233,6 +284,13 @@ impl CatalogRuntime {
         })
     }
 
+    pub(crate) fn manifest(&self, id: &str) -> Option<CatalogManifest> {
+        self.manifests
+            .iter()
+            .find(|manifest| manifest.id == id)
+            .cloned()
+    }
+
     fn list(
         &self,
         query: Option<&str>,
@@ -279,7 +337,7 @@ impl CatalogRuntime {
             .collect())
     }
 
-    fn detect(&self) -> Result<Vec<Detection>, String> {
+    pub(crate) fn detect(&self) -> Result<Vec<Detection>, String> {
         let mut detections = HashMap::new();
         for manifest in &self.manifests {
             if let Some(detection) = detect_manifest(manifest) {
@@ -349,7 +407,7 @@ fn validate_manifest(manifest: &CatalogManifest) -> Result<(), String> {
     validate_unique_platforms(&manifest.platforms, &manifest.id)?;
     validate_executable_detection(&manifest.executable_detection, &manifest.id)?;
     validate_versions(&manifest.versions, &manifest.id)?;
-    validate_install_methods(&manifest.install_methods, &manifest.id)?;
+    validate_install_methods(&manifest.install_methods, &manifest.platforms, &manifest.id)?;
     validate_prerequisites(&manifest.prerequisites, &manifest.id)?;
     validate_launch_profiles(
         &manifest.launch_profiles,
@@ -420,6 +478,88 @@ fn validate_executable(value: &str, field: &str, id: &str) -> Result<(), String>
     Ok(())
 }
 
+fn validate_argv(argv: &[String], field: &str, id: &str) -> Result<(), String> {
+    let executable = argv
+        .first()
+        .ok_or_else(|| format!("manifest {id} has an empty {field}"))?;
+    validate_executable(executable, field, id)?;
+    if argv
+        .iter()
+        .skip(1)
+        .any(|part| part.is_empty() || part.chars().any(char::is_control))
+    {
+        return Err(format!("manifest {id} has an unsafe {field} argument"));
+    }
+    Ok(())
+}
+
+fn validate_package_id(value: &str, field: &str, id: &str) -> Result<(), String> {
+    if value.is_empty()
+        || value.len() > 128
+        || !value.chars().all(|character| {
+            character.is_ascii_alphanumeric() || matches!(character, '.' | '-' | '_')
+        })
+    {
+        return Err(format!("manifest {id} has an unsafe {field} value"));
+    }
+    Ok(())
+}
+
+fn validate_winget_method(
+    method: &InstallMethod,
+    platforms: &[Platform],
+    id: &str,
+) -> Result<(), String> {
+    if !platforms.contains(&Platform::Windows) {
+        return Err(format!(
+            "manifest {id} declares WinGet without Windows support"
+        ));
+    }
+    if !method
+        .source
+        .to_ascii_lowercase()
+        .contains("learn.microsoft.com")
+    {
+        return Err(format!(
+            "manifest {id} must use Microsoft's WinGet documentation as the WinGet source"
+        ));
+    }
+    let package_id = method
+        .package_id
+        .as_deref()
+        .ok_or_else(|| format!("manifest {id} WinGet method has no package id"))?;
+    let command = method
+        .command
+        .as_deref()
+        .ok_or_else(|| format!("manifest {id} WinGet method has no exact command"))?;
+    if command.first().map(String::as_str) != Some("winget.exe")
+        && command.first().map(String::as_str) != Some("winget")
+    {
+        return Err(format!(
+            "manifest {id} WinGet command must start with winget"
+        ));
+    }
+    if !command.iter().any(|part| part == "install")
+        || !command
+            .windows(2)
+            .any(|parts| parts[0] == "--id" && parts[1] == package_id)
+        || !command.iter().any(|part| part == "--exact")
+        || !command
+            .windows(2)
+            .any(|parts| parts[0] == "--source" && parts[1] == "winget")
+    {
+        return Err(format!(
+            "manifest {id} WinGet command must pin the package and source"
+        ));
+    }
+    if method.verification_command.is_none() {
+        return Err(format!(
+            "manifest {id} WinGet method has no verification command"
+        ));
+    }
+    Ok(())
+}
+
 fn validate_versions(versions: &VersionInfo, id: &str) -> Result<(), String> {
     if versions
         .latest
@@ -432,7 +572,11 @@ fn validate_versions(versions: &VersionInfo, id: &str) -> Result<(), String> {
     validate_unique_text(&versions.verified, "versions.verified", id)
 }
 
-fn validate_install_methods(methods: &[InstallMethod], id: &str) -> Result<(), String> {
+fn validate_install_methods(
+    methods: &[InstallMethod],
+    platforms: &[Platform],
+    id: &str,
+) -> Result<(), String> {
     if methods.is_empty() {
         return Err(format!("manifest {id} must declare an install method"));
     }
@@ -442,6 +586,12 @@ fn validate_install_methods(methods: &[InstallMethod], id: &str) -> Result<(), S
         require_text(&method.label, "installMethods.label", id)?;
         require_text(&method.kind, "installMethods.kind", id)?;
         require_https_url(&method.source, "installMethods.source", id)?;
+        require_text(
+            &method.data_expectations,
+            "installMethods.dataExpectations",
+            id,
+        )?;
+        require_text(&method.rollback_limits, "installMethods.rollbackLimits", id)?;
         if !seen.insert(&method.id) {
             return Err(format!(
                 "manifest {id} repeats install method {}",
@@ -449,13 +599,22 @@ fn validate_install_methods(methods: &[InstallMethod], id: &str) -> Result<(), S
             ));
         }
         if let Some(command) = &method.command {
-            if command.is_empty()
-                || command
-                    .iter()
-                    .any(|part| part.chars().any(char::is_control))
-            {
-                return Err(format!("manifest {id} has an invalid install command"));
-            }
+            validate_argv(command, "installMethods.command", id)?;
+        }
+        if let Some(package_id) = &method.package_id {
+            validate_package_id(package_id, "installMethods.packageId", id)?;
+        }
+        if let Some(version) = &method.version {
+            require_text(version, "installMethods.version", id)?;
+        }
+        for feature in &method.affected_system_features {
+            require_text(feature, "installMethods.affectedSystemFeatures", id)?;
+        }
+        if let Some(command) = &method.verification_command {
+            validate_argv(command, "installMethods.verificationCommand", id)?;
+        }
+        if method.kind.eq_ignore_ascii_case("winget") {
+            validate_winget_method(method, platforms, id)?;
         }
     }
     Ok(())
@@ -467,6 +626,12 @@ fn validate_prerequisites(prerequisites: &[Prerequisite], id: &str) -> Result<()
         require_text(&prerequisite.id, "prerequisites.id", id)?;
         require_text(&prerequisite.label, "prerequisites.label", id)?;
         require_text(&prerequisite.description, "prerequisites.description", id)?;
+        require_text(&prerequisite.kind, "prerequisites.kind", id)?;
+        require_text(
+            &prerequisite.rollback_limits,
+            "prerequisites.rollbackLimits",
+            id,
+        )?;
         if !seen.insert(&prerequisite.id) {
             return Err(format!(
                 "manifest {id} repeats prerequisite {}",
@@ -479,6 +644,12 @@ fn validate_prerequisites(prerequisites: &[Prerequisite], id: &str) -> Result<()
             .is_some_and(|check| check.chars().any(char::is_control))
         {
             return Err(format!("manifest {id} has an invalid prerequisite check"));
+        }
+        if let Some(command) = &prerequisite.command {
+            validate_argv(command, "prerequisites.command", id)?;
+        }
+        if let Some(source) = &prerequisite.source {
+            require_https_url(source, "prerequisites.source", id)?;
         }
     }
     Ok(())

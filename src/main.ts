@@ -30,6 +30,8 @@ type CatalogStatus = {
   detail: string;
 };
 
+type PrivilegeRequirement = "user" | "mayElevate" | "elevationRequired" | "unknown";
+
 type CatalogManifest = {
   schemaVersion: number;
   id: string;
@@ -58,12 +60,26 @@ type CatalogManifest = {
     kind: string;
     source: string;
     command: string[] | null;
+    packageId: string | null;
+    version: string | null;
+    privileges: PrivilegeRequirement;
+    downloadSizeBytes: number | null;
+    affectedSystemFeatures: string[];
+    dataExpectations: string;
+    rollbackLimits: string;
+    verificationCommand: string[] | null;
   }>;
   prerequisites: Array<{
     id: string;
     label: string;
     description: string;
+    kind: string;
+    optional: boolean;
     check: string | null;
+    command: string[] | null;
+    source: string | null;
+    privileges: PrivilegeRequirement;
+    rollbackLimits: string;
   }>;
   launchProfiles: Array<{
     id: string;
@@ -109,6 +125,70 @@ type CatalogEntry = {
   manifest: CatalogManifest;
   statuses: CatalogStatus[];
   detection: CatalogDetection | null;
+};
+
+type InstallStep = {
+  id: string;
+  label: string;
+  kind: string;
+  optional: boolean;
+  description: string;
+  command: string[] | null;
+  source: string | null;
+  privileges: PrivilegeRequirement;
+  rollbackLimits: string;
+  requiresConfirmation: boolean;
+};
+
+type InstallPlan = {
+  manifestId: string;
+  toolName: string;
+  publisher: string;
+  version: string | null;
+  catalogSource: {
+    kind: string;
+    url: string;
+  };
+  packageSource: string;
+  methodId: string;
+  methodLabel: string;
+  methodKind: string;
+  packageId: string | null;
+  supported: boolean;
+  command: string[] | null;
+  privileges: PrivilegeRequirement;
+  downloadSizeBytes: number | null;
+  affectedSystemFeatures: string[];
+  dataExpectations: string;
+  rollbackLimits: string;
+  prerequisites: InstallStep[];
+  appStep: InstallStep;
+  manualInstructions: string | null;
+};
+
+type InstallReceipt = {
+  id: string;
+  manifestId: string;
+  toolName: string;
+  publisher: string;
+  version: string | null;
+  source: string;
+  method: string;
+  packageId: string | null;
+  executablePath: string;
+  verification: string;
+  installedAt: string;
+};
+
+type InstallOutcome = {
+  state: string;
+  message: string;
+  systemChange: boolean;
+  retryable: boolean;
+  rollbackAvailable: boolean;
+  logs: string;
+  manualRecovery: string | null;
+  receipt: InstallReceipt | null;
 };
 
 const app = document.querySelector<HTMLDivElement>("#app");
@@ -271,6 +351,7 @@ let storeEntries: CatalogEntry[] = [];
 let selectedStoreId: string | undefined;
 let storeRequestId = 0;
 let storeRefreshTimer: number | undefined;
+let installBusy = false;
 
 function renderTerminalStatus(): void {
   status.textContent = terminalStatusText;
@@ -365,6 +446,318 @@ function statusClass(state: CatalogStatusState): string {
   return `status-${state}`;
 }
 
+function privilegeLabel(value: PrivilegeRequirement): string {
+  switch (value) {
+    case "user":
+      return "current user";
+    case "mayElevate":
+      return "may ask for elevation";
+    case "elevationRequired":
+      return "elevation required";
+    default:
+      return "not declared";
+  }
+}
+
+function formatDownloadSize(value: number | null): string {
+  if (value === null) {
+    return "not available";
+  }
+
+  if (value < 1024) {
+    return `${value.toLocaleString()} bytes`;
+  }
+
+  const units = ["KiB", "MiB", "GiB"];
+  let size = value;
+  let unit = "bytes";
+  for (const candidate of units) {
+    size /= 1024;
+    unit = candidate;
+    if (size < 1024 || candidate === units.at(-1)) {
+      break;
+    }
+  }
+  return `${size.toFixed(size >= 10 ? 1 : 2)} ${unit} (${value.toLocaleString()} bytes)`;
+}
+
+function formatCommand(command: string[] | null): string {
+  if (!command || command.length === 0) {
+    return "not declared";
+  }
+
+  return command
+    .map((part) => (/[\s"]/.test(part) ? `"${part.replaceAll('"', '\\"')}"` : part))
+    .join(" ");
+}
+
+function appendInstallSource(parent: HTMLElement, label: string, value: string): void {
+  const line = makeElement("div", "detail-line");
+  line.append(makeElement("span", "detail-label", label));
+  const link = makeElement("a", "detail-link", value);
+  link.href = value;
+  link.target = "_blank";
+  link.rel = "noreferrer";
+  line.append(link);
+  parent.append(line);
+}
+
+function createInstallButton(label: string, onClick: () => void): HTMLButtonElement {
+  const button = makeElement("button", "detail-action", label) as HTMLButtonElement;
+  button.type = "button";
+  button.disabled = installBusy;
+  button.addEventListener("click", onClick);
+  return button;
+}
+
+function appendInstallStep(
+  parent: HTMLElement,
+  entry: CatalogEntry,
+  plan: InstallPlan,
+  host: HTMLElement,
+  step: InstallStep,
+  showAction = true,
+): void {
+  const stepView = makeElement("section", "install-step");
+  const stepHeader = makeElement("div", "install-step-header");
+  stepHeader.append(makeElement("strong", undefined, step.label));
+  if (step.optional) {
+    stepHeader.append(makeElement("span", "install-step-optional", "optional"));
+  }
+  stepView.append(stepHeader);
+  stepView.append(makeElement("p", "install-step-description", step.description));
+
+  const stepMeta = makeElement("div", "install-step-meta");
+  appendDetailLine(stepMeta, "Type", step.kind);
+  appendDetailLine(stepMeta, "Privileges", privilegeLabel(step.privileges));
+  appendDetailLine(stepMeta, "Rollback", step.rollbackLimits);
+  if (step.source) {
+    appendInstallSource(stepMeta, "Source", step.source);
+  }
+  stepView.append(stepMeta);
+
+  if (step.command) {
+    stepView.append(makeElement("code", "install-command", formatCommand(step.command)));
+    if (showAction) {
+      const buttonRow = makeElement("div", "install-button-row");
+      const label = step.optional ? "Approve optional step" : "Approve prerequisite";
+      buttonRow.append(
+        createInstallButton(label, () => void executeInstallStep(entry, plan, host, step.id)),
+      );
+      if (step.optional) {
+        buttonRow.append(makeElement("span", "install-step-hint", "Or skip it and continue."));
+      }
+      stepView.append(buttonRow);
+    }
+  } else {
+    stepView.append(
+      makeElement(
+        "p",
+        "detail-empty",
+        step.kind === "application"
+          ? "No executable command is declared for this method; follow the publisher instructions. Arkonad will not guess a command."
+          : step.optional
+          ? "Optional manual prerequisite; skip it or follow the publisher instructions. Arkonad will not guess a command."
+          : "Manual prerequisite; follow the publisher instructions. Arkonad will not guess a command.",
+      ),
+    );
+  }
+
+  parent.append(stepView);
+}
+
+async function loadInstallPlan(
+  entry: CatalogEntry,
+  host: HTMLElement,
+  methodId: string,
+): Promise<void> {
+  if (installBusy) {
+    return;
+  }
+
+  host.replaceChildren(makeElement("p", "detail-empty", "Preparing reviewed install plan…"));
+  try {
+    const plan = await invoke<InstallPlan>("install_plan", {
+      manifestId: entry.manifest.id,
+      methodId,
+    });
+    renderInstallPlan(entry, host, plan);
+  } catch (error) {
+    host.replaceChildren(
+      makeElement("p", "install-manual", `Could not prepare the install plan: ${String(error)}`),
+    );
+  }
+}
+
+function renderInstallPlan(entry: CatalogEntry, host: HTMLElement, plan: InstallPlan): void {
+  host.replaceChildren();
+  const planView = makeElement("div", "install-plan");
+  const heading = makeElement("div", "install-plan-heading");
+  heading.append(makeElement("strong", undefined, `${plan.toolName} · ${plan.methodLabel}`));
+  heading.append(
+    makeElement(
+      "p",
+      "install-plan-warning",
+      "Review only. Nothing runs until you approve a step.",
+    ),
+  );
+  planView.append(heading);
+
+  const facts = makeElement("div", "install-plan-facts");
+  appendInstallSource(facts, "Catalog", plan.catalogSource.url);
+  appendInstallSource(facts, "Package source", plan.packageSource);
+  appendDetailLine(facts, "Publisher", plan.publisher);
+  appendDetailLine(facts, "Version", plan.version ?? "not declared");
+  appendDetailLine(facts, "Method", `${plan.methodKind} · ${plan.methodLabel}`);
+  appendDetailLine(facts, "Package ID", plan.packageId ?? "not declared");
+  appendDetailLine(facts, "Privileges", privilegeLabel(plan.privileges));
+  appendDetailLine(facts, "Download size", formatDownloadSize(plan.downloadSizeBytes));
+  appendDetailLine(
+    facts,
+    "Affected features",
+    plan.affectedSystemFeatures.length > 0
+      ? plan.affectedSystemFeatures.join(", ")
+      : "none declared",
+  );
+  appendDetailLine(facts, "Data expectations", plan.dataExpectations);
+  appendDetailLine(facts, "Rollback limits", plan.rollbackLimits);
+  planView.append(facts);
+
+  const prerequisites = appendDetailSection(planView, "Prerequisites");
+  if (plan.prerequisites.length === 0) {
+    prerequisites.append(makeElement("p", "detail-empty", "No prerequisites declared."));
+  } else {
+    for (const step of plan.prerequisites) {
+      appendInstallStep(prerequisites, entry, plan, host, step);
+    }
+  }
+
+  const application = appendDetailSection(planView, "Application");
+  appendInstallStep(application, entry, plan, host, plan.appStep, false);
+  if (plan.supported && plan.appStep.command) {
+    const buttonRow = makeElement("div", "install-button-row");
+    buttonRow.append(
+      createInstallButton("Approve and install", () =>
+        void executeInstallStep(entry, plan, host, plan.appStep.id),
+      ),
+    );
+    application.append(buttonRow);
+  } else {
+    application.append(
+      makeElement(
+        "p",
+        "install-manual",
+        plan.manualInstructions ??
+          "No supported executable method is declared. Follow the publisher instructions manually.",
+      ),
+    );
+  }
+
+  const cancelRow = makeElement("div", "install-button-row");
+  cancelRow.append(
+    createInstallButton("Cancel review", () => {
+      host.replaceChildren(
+        makeElement("p", "detail-empty", "Install review cancelled. No system change was made."),
+      );
+    }),
+  );
+  planView.append(cancelRow);
+  host.append(planView);
+}
+
+function renderInstallOutcome(
+  entry: CatalogEntry,
+  plan: InstallPlan,
+  host: HTMLElement,
+  stepId: string,
+  outcome: InstallOutcome,
+): void {
+  host.replaceChildren();
+  const outcomeView = makeElement("section", "install-outcome");
+  outcomeView.dataset.state = outcome.state;
+  outcomeView.append(makeElement("strong", "install-outcome-state", outcome.state));
+  outcomeView.append(makeElement("p", "install-outcome-message", outcome.message));
+  appendDetailLine(outcomeView, "System change", outcome.systemChange ? "yes" : "no");
+
+  if (outcome.receipt) {
+    const receipt = appendDetailSection(outcomeView, "Install receipt");
+    appendDetailLine(receipt, "Receipt ID", outcome.receipt.id);
+    appendDetailLine(receipt, "Method", outcome.receipt.method);
+    appendDetailLine(receipt, "Version", outcome.receipt.version ?? "not recorded");
+    appendDetailLine(receipt, "Executable", outcome.receipt.executablePath);
+    appendDetailLine(receipt, "Installed at", outcome.receipt.installedAt);
+    appendDetailLine(receipt, "Verification", outcome.receipt.verification);
+  }
+
+  if (outcome.logs) {
+    const logSection = appendDetailSection(outcomeView, "Command log");
+    logSection.append(makeElement("pre", "install-log", outcome.logs));
+  }
+
+  if (outcome.manualRecovery) {
+    outcomeView.append(makeElement("p", "install-manual", outcome.manualRecovery));
+  }
+
+  const buttonRow = makeElement("div", "install-button-row");
+  if (outcome.retryable) {
+    buttonRow.append(
+      createInstallButton("Retry step", () =>
+        void executeInstallStep(entry, plan, host, stepId),
+      ),
+    );
+  }
+  if (outcome.state === "completed" && stepId !== plan.appStep.id) {
+    buttonRow.append(
+      createInstallButton("Back to install plan", () => renderInstallPlan(entry, host, plan)),
+    );
+  }
+  if (buttonRow.childElementCount > 0) {
+    outcomeView.append(buttonRow);
+  }
+  host.append(outcomeView);
+}
+
+async function executeInstallStep(
+  entry: CatalogEntry,
+  plan: InstallPlan,
+  host: HTMLElement,
+  stepId: string,
+): Promise<void> {
+  if (installBusy) {
+    return;
+  }
+
+  installBusy = true;
+  host.replaceChildren(
+    makeElement("p", "detail-empty", "Running the approved step… Arkonad is waiting for its result."),
+  );
+
+  try {
+    const outcome = await invoke<InstallOutcome>("install_execute", {
+      request: {
+        manifestId: entry.manifest.id,
+        methodId: plan.methodId,
+        stepId,
+        confirmed: true,
+      },
+    });
+    installBusy = false;
+    renderInstallOutcome(entry, plan, host, stepId, outcome);
+  } catch (error) {
+    installBusy = false;
+    renderInstallOutcome(entry, plan, host, stepId, {
+      state: "error",
+      message: `Arkonad could not read the install result: ${String(error)}`,
+      systemChange: false,
+      retryable: true,
+      rollbackAvailable: false,
+      logs: "",
+      manualRecovery: "Check whether the package changed before retrying the step.",
+      receipt: null,
+    });
+  }
+}
+
 function renderStoreDetail(entry: CatalogEntry | undefined): void {
   storeDetail.replaceChildren();
 
@@ -450,12 +843,19 @@ function renderStoreDetail(entry: CatalogEntry | undefined): void {
   }
 
   const installSection = appendDetailSection(storeDetail, "Install methods");
+  const installReviewHost = makeElement("div", "install-review-host");
   for (const method of entry.manifest.installMethods) {
     const methodLine = makeElement("div", "manifest-item");
     methodLine.append(makeElement("strong", undefined, method.label));
     methodLine.append(makeElement("span", "detail-subtle", `${method.kind} · ${method.source}`));
+    const methodButton = createInstallButton(
+      method.kind === "winget" ? "Review install plan" : "Show manual steps",
+      () => void loadInstallPlan(entry, installReviewHost, method.id),
+    );
+    methodLine.append(methodButton);
     installSection.append(methodLine);
   }
+  installSection.append(installReviewHost);
 
   const launchSection = appendDetailSection(storeDetail, "Launch profiles");
   for (const profile of entry.manifest.launchProfiles) {
