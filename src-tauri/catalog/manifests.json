@@ -337,12 +337,12 @@
       "kind": "repository",
       "url": "https://github.com/jesseduffield/lazygit"
     },
-    "lastMetadataRefresh": "2026-08-20",
+    "lastMetadataRefresh": "2026-08-21",
     "executableDetection": {
       "commands": ["lazygit.exe", "lazygit"]
     },
     "versions": {
-      "latest": null,
+      "latest": "0.64.0",
       "supported": [],
       "verified": []
     },
@@ -353,6 +353,33 @@
         "kind": "manual",
         "source": "https://github.com/jesseduffield/lazygit",
         "command": null
+      },
+      {
+        "id": "winget",
+        "label": "Install with WinGet",
+        "kind": "winget",
+        "source": "https://learn.microsoft.com/windows/package-manager/winget/",
+        "command": [
+          "winget.exe",
+          "install",
+          "--id",
+          "JesseDuffield.lazygit",
+          "--exact",
+          "--source",
+          "winget",
+          "--accept-source-agreements",
+          "--accept-package-agreements"
+        ],
+        "packageId": "JesseDuffield.lazygit",
+        "version": "0.64.0",
+        "privileges": "mayElevate",
+        "downloadSizeBytes": null,
+        "affectedSystemFeatures": [
+          "WinGet package registration and executable availability"
+        ],
+        "dataExpectations": "WinGet downloads the package; lazygit stores tool-owned configuration in its declared location.",
+        "rollbackLimits": "Arkonad does not remove shared WinGet infrastructure; removing the package is a separate reviewed action.",
+        "verificationCommand": ["lazygit.exe", "--version"]
       }
     ],
     "prerequisites": [],

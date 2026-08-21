@@ -522,6 +522,161 @@ select {
   font-size: 11px;
 }
 
+.detail-action {
+  width: fit-content;
+  margin-top: 4px;
+  padding: 4px 7px;
+  border: 1px solid #303b45;
+  border-radius: 2px;
+  background: #10161b;
+  color: #c4cdd3;
+  cursor: pointer;
+  font-size: 10px;
+}
+
+.detail-action:hover,
+.detail-action:focus-visible {
+  border-color: #ff9c4a;
+  color: #ffffff;
+  outline: none;
+}
+
+.detail-action:disabled {
+  cursor: wait;
+  opacity: 0.55;
+}
+
+.install-review-host {
+  margin-top: 8px;
+}
+
+.install-plan {
+  padding: 9px 0 2px;
+  border-top: 1px solid #202830;
+}
+
+.install-plan-heading {
+  display: grid;
+  gap: 4px;
+  color: #e8ecef;
+  font-size: 12px;
+}
+
+.install-plan-warning {
+  margin: 0;
+  color: #ffcf70;
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.install-plan-facts {
+  margin-top: 8px;
+}
+
+.install-step {
+  margin-top: 8px;
+  padding: 8px;
+  border: 1px solid #202830;
+  background: #0c1014;
+}
+
+.install-step-header {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: #cdd5da;
+  font-size: 11px;
+}
+
+.install-step-optional {
+  color: #ffcf70;
+  font-size: 9px;
+  text-transform: uppercase;
+}
+
+.install-step-description,
+.install-manual,
+.install-outcome-message {
+  margin: 5px 0 0;
+  color: #a9b3ba;
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.install-step-meta {
+  margin-top: 4px;
+}
+
+.install-command {
+  display: block;
+  max-width: 100%;
+  margin-top: 7px;
+  padding: 6px 7px;
+  overflow-wrap: anywhere;
+  border-left: 2px solid #ff9c4a;
+  background: #11181e;
+  color: #9ed67a;
+  font-size: 10px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+}
+
+.install-button-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 7px;
+}
+
+.install-step-hint {
+  color: #68737d;
+  font-size: 10px;
+}
+
+.install-manual {
+  color: #ffcf70;
+}
+
+.install-outcome {
+  margin-top: 8px;
+  padding: 9px;
+  border: 1px solid #303b45;
+  background: #0c1014;
+}
+
+.install-outcome[data-state="installed"],
+.install-outcome[data-state="completed"] {
+  border-color: rgba(158, 214, 122, 0.55);
+}
+
+.install-outcome[data-state="failed"],
+.install-outcome[data-state="verification-failed"],
+.install-outcome[data-state="installed-unrecorded"],
+.install-outcome[data-state="error"] {
+  border-color: rgba(255, 118, 107, 0.55);
+}
+
+.install-outcome-state {
+  color: #e8ecef;
+  font-size: 11px;
+  text-transform: uppercase;
+}
+
+.install-log {
+  max-height: 180px;
+  margin: 5px 0 0;
+  padding: 7px;
+  overflow: auto;
+  border: 1px solid #202830;
+  background: #090b0e;
+  color: #a9b3ba;
+  font-family: inherit;
+  font-size: 10px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+}
+
 .store-error {
   padding: 8px 10px;
   border-top: 1px solid rgba(255, 118, 107, 0.42);
