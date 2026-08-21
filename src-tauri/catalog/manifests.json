@@ -379,7 +379,40 @@
         ],
         "dataExpectations": "WinGet downloads the package; lazygit stores tool-owned configuration in its declared location.",
         "rollbackLimits": "Arkonad does not remove shared WinGet infrastructure; removing the package is a separate reviewed action.",
-        "verificationCommand": ["lazygit.exe", "--version"]
+        "verificationCommand": ["lazygit.exe", "--version"],
+        "updateCommand": [
+          "winget.exe",
+          "upgrade",
+          "--id",
+          "JesseDuffield.lazygit",
+          "--exact",
+          "--source",
+          "winget",
+          "--accept-source-agreements",
+          "--accept-package-agreements"
+        ],
+        "repairCommand": [
+          "winget.exe",
+          "repair",
+          "--id",
+          "JesseDuffield.lazygit",
+          "--exact",
+          "--source",
+          "winget",
+          "--accept-source-agreements",
+          "--accept-package-agreements"
+        ],
+        "uninstallCommand": [
+          "winget.exe",
+          "uninstall",
+          "--id",
+          "JesseDuffield.lazygit",
+          "--exact",
+          "--source",
+          "winget",
+          "--preserve",
+          "--accept-source-agreements"
+        ]
       }
     ],
     "prerequisites": [],

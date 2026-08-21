@@ -646,7 +646,11 @@ select {
 }
 
 .install-outcome[data-state="installed"],
-.install-outcome[data-state="completed"] {
+.install-outcome[data-state="completed"],
+.install-outcome[data-state="updated"],
+.install-outcome[data-state="repaired"],
+.install-outcome[data-state="uninstalled"],
+.install-outcome[data-state="data-cleaned"] {
   border-color: rgba(158, 214, 122, 0.55);
 }
 
