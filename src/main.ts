@@ -135,6 +135,7 @@ type InstallStep = {
   label: string;
   kind: string;
   optional: boolean;
+  availability: "ready" | "missing" | "unknown";
   description: string;
   command: string[] | null;
   source: string | null;
@@ -165,12 +166,15 @@ type InstallPlan = {
   dataExpectations: string;
   rollbackLimits: string;
   prerequisites: InstallStep[];
+  optionalSetup: InstallStep[];
+  prerequisitesReady: boolean;
   appStep: InstallStep;
   manualInstructions: string | null;
 };
 
 type InstallReceipt = {
   id: string;
+  ownership: "managed" | "adopted";
   manifestId: string;
   toolName: string;
   publisher: string;
@@ -195,7 +199,13 @@ type InstallOutcome = {
   receipt: InstallReceipt | null;
 };
 
-type ManagementOperation = "update" | "repair" | "uninstall" | "dataCleanup";
+type ManagementOperation =
+  | "adopt"
+  | "integrationReset"
+  | "update"
+  | "repair"
+  | "uninstall"
+  | "dataCleanup";
 
 type MyAppEntry = {
   manifestId: string;
@@ -203,7 +213,7 @@ type MyAppEntry = {
   summary: string;
   category: CatalogCategory;
   publisher: string;
-  ownership: "managed" | "detected";
+  ownership: "managed" | "adopted" | "detected";
   installedVersion: string | null;
   detectedVersion: string | null;
   updateState: "available" | "current" | "unknown" | "notManaged";
@@ -219,6 +229,12 @@ type MyAppEntry = {
     description: string;
   }>;
   receipt: InstallReceipt | null;
+};
+
+type MyAppsSnapshot = {
+  entries: MyAppEntry[];
+  updatesAvailable: number;
+  checkedAt: string;
 };
 
 type DataCleanupTarget = {
@@ -269,7 +285,8 @@ app.innerHTML = `
         Store <span class="key-hint">Ctrl+Shift+Space</span>
       </button>
       <button class="topbar-action" type="button" data-apps-open aria-expanded="false">
-        My Apps <span class="key-hint">Ctrl+Shift+A</span>
+        My Apps <span class="apps-update-badge" data-apps-update-badge hidden aria-live="polite"></span>
+        <span class="key-hint">Ctrl+Shift+A</span>
       </button>
       <div class="status" data-status>connecting</div>
     </header>
@@ -369,6 +386,7 @@ const cwdLabel = app.querySelector<HTMLSpanElement>("[data-cwd]")!;
 const errorPanel = app.querySelector<HTMLDivElement>("[data-error]")!;
 const storeOpenButton = app.querySelector<HTMLButtonElement>("[data-store-open]")!;
 const appsOpenButton = app.querySelector<HTMLButtonElement>("[data-apps-open]")!;
+const appsUpdateBadge = app.querySelector<HTMLSpanElement>("[data-apps-update-badge]")!;
 const storeCloseButton = app.querySelector<HTMLButtonElement>("[data-store-close]")!;
 const appsCloseButton = app.querySelector<HTMLButtonElement>("[data-apps-close]")!;
 const storeView = app.querySelector<HTMLElement>("[data-store-view]")!;
@@ -396,6 +414,7 @@ if (
   !errorPanel ||
   !storeOpenButton ||
   !appsOpenButton ||
+  !appsUpdateBadge ||
   !storeCloseButton ||
   !appsCloseButton ||
   !storeView ||
@@ -658,6 +677,7 @@ function appendInstallStep(
 
   const stepMeta = makeElement("div", "install-step-meta");
   appendDetailLine(stepMeta, "Type", step.kind);
+  appendDetailLine(stepMeta, "Discovery", step.availability);
   appendDetailLine(stepMeta, "Privileges", privilegeLabel(step.privileges));
   appendDetailLine(stepMeta, "Rollback", step.rollbackLimits);
   if (step.source) {
@@ -667,7 +687,11 @@ function appendInstallStep(
 
   if (step.command) {
     stepView.append(makeElement("code", "install-command", formatCommand(step.command)));
-    if (showAction) {
+    if (step.kind !== "application" && step.availability === "ready") {
+      stepView.append(
+        makeElement("p", "detail-empty", "Already available; no setup action is needed."),
+      );
+    } else if (showAction) {
       const buttonRow = makeElement("div", "install-button-row");
       const label = step.optional ? "Approve optional step" : "Approve prerequisite";
       buttonRow.append(
@@ -761,9 +785,25 @@ function renderInstallPlan(entry: CatalogEntry, host: HTMLElement, plan: Install
     }
   }
 
+  const optionalSetup = appendDetailSection(planView, "Optional setup");
+  if (plan.optionalSetup.length === 0) {
+    optionalSetup.append(makeElement("p", "detail-empty", "No optional setup declared."));
+  } else {
+    optionalSetup.append(
+      makeElement(
+        "p",
+        "detail-note",
+        "These enhancements are not required to install or use the core tool. Approve either step separately, or skip both.",
+      ),
+    );
+    for (const step of plan.optionalSetup) {
+      appendInstallStep(optionalSetup, entry, plan, host, step);
+    }
+  }
+
   const application = appendDetailSection(planView, "Application");
   appendInstallStep(application, entry, plan, host, plan.appStep, false);
-  if (plan.supported && plan.appStep.command) {
+  if (plan.supported && plan.appStep.command && plan.prerequisitesReady) {
     const buttonRow = makeElement("div", "install-button-row");
     buttonRow.append(
       createInstallButton("Approve and install", () =>
@@ -771,6 +811,14 @@ function renderInstallPlan(entry: CatalogEntry, host: HTMLElement, plan: Install
       ),
     );
     application.append(buttonRow);
+  } else if (!plan.prerequisitesReady) {
+    application.append(
+      makeElement(
+        "p",
+        "install-manual",
+        "A required prerequisite is still missing. Complete its reviewed step, then refresh this plan before installing the application.",
+      ),
+    );
   } else {
     application.append(
       makeElement(
@@ -837,7 +885,9 @@ function renderInstallOutcome(
   }
   if (outcome.state === "completed" && stepId !== plan.appStep.id) {
     buttonRow.append(
-      createInstallButton("Back to install plan", () => renderInstallPlan(entry, host, plan)),
+      createInstallButton("Refresh install plan", () =>
+        void loadInstallPlan(entry, host, plan.methodId),
+      ),
     );
   }
   if (buttonRow.childElementCount > 0) {
@@ -889,6 +939,10 @@ async function executeInstallStep(
 
 function managementOperationLabel(operation: ManagementOperation): string {
   switch (operation) {
+    case "adopt":
+      return "adoption";
+    case "integrationReset":
+      return "integration reset";
     case "update":
       return "update";
     case "repair":
@@ -980,6 +1034,7 @@ async function executeManagement(
       request: {
         manifestId: entry.manifestId,
         operation: plan.operation,
+        methodId: plan.methodId,
         confirmed: true,
       },
     });
@@ -1066,11 +1121,19 @@ function renderManagementPlan(entry: MyAppEntry, host: HTMLElement, plan: Manage
   if (plan.manualInstructions) {
     planView.append(makeElement("p", "install-manual", plan.manualInstructions));
   }
-  if (plan.supported && (plan.command || plan.operation === "dataCleanup")) {
+  if (
+    plan.supported &&
+    (plan.command ||
+      plan.operation === "adopt" ||
+      plan.operation === "integrationReset" ||
+      plan.operation === "dataCleanup")
+  ) {
     const buttonRow = makeElement("div", "install-button-row");
     const buttonLabel =
       plan.operation === "uninstall"
         ? "Approve uninstall (keep data)"
+        : plan.operation === "adopt"
+          ? "Approve adoption"
         : `Approve ${managementOperationLabel(plan.operation)}`;
     buttonRow.append(createInstallButton(buttonLabel, () => void executeManagement(entry, plan, host)));
     planView.append(buttonRow);
@@ -1144,11 +1207,12 @@ function renderMyAppsDetail(entry: MyAppEntry | undefined): void {
 
   const actionSection = appendDetailSection(appsDetail, "Manage");
   const reviewHost = makeElement("div", "install-review-host");
-  if (entry.ownership === "managed") {
+  if (entry.ownership !== "detected") {
     const buttonRow = makeElement("div", "install-button-row");
     for (const [operation, label] of [
       ["update", "Review update"],
       ["repair", "Review repair"],
+      ["integrationReset", "Review integration reset"],
       ["uninstall", "Review uninstall"] ,
     ] as const) {
       buttonRow.append(
@@ -1156,26 +1220,42 @@ function renderMyAppsDetail(entry: MyAppEntry | undefined): void {
       );
     }
     actionSection.append(buttonRow);
-    const cleanupSection = appendDetailSection(actionSection, "Separate data cleanup");
-    cleanupSection.append(
-      makeElement(
-        "p",
-        "detail-note",
-        "Uninstall preserves tool data. Cleanup is a separate reviewed action with exact targets only.",
-      ),
-    );
-    cleanupSection.append(
-      createInstallButton(
-        "Review data cleanup",
-        () => void loadManagementPlan(entry, reviewHost, "dataCleanup"),
-      ),
-    );
+    if (entry.ownership === "managed") {
+      const cleanupSection = appendDetailSection(actionSection, "Separate data cleanup");
+      cleanupSection.append(
+        makeElement(
+          "p",
+          "detail-note",
+          "Uninstall preserves tool data. Cleanup is a separate reviewed action with exact targets only.",
+        ),
+      );
+      cleanupSection.append(
+        createInstallButton(
+          "Review data cleanup",
+          () => void loadManagementPlan(entry, reviewHost, "dataCleanup"),
+        ),
+      );
+    } else {
+      actionSection.append(
+        makeElement(
+          "p",
+          "detail-note",
+          "This external installation has an adopted package-management method. Arkonad still does not own or clean its tool data.",
+        ),
+      );
+    }
   } else {
     actionSection.append(
       makeElement(
         "p",
         "detail-note",
-        "Detected outside Arkonad. It remains usable, but Arkonad will not update, repair, uninstall, or clean its data.",
+        "Detected outside Arkonad. It remains usable, but Arkonad will not update, repair, uninstall, or clean its data unless you explicitly adopt a supported management method.",
+      ),
+    );
+    actionSection.append(
+      createInstallButton(
+        "Review supported adoption",
+        () => void loadManagementPlan(entry, reviewHost, "adopt"),
       ),
     );
   }
@@ -1271,11 +1351,25 @@ async function refreshMyApps(): Promise<void> {
   appsNotice.textContent = "Checking PATH and Arkonad receipts read-only…";
   appsCount.textContent = "loading…";
   try {
-    myAppsEntries = await invoke<MyAppEntry[]>("my_apps_list");
+    const snapshot = await invoke<MyAppsSnapshot>("my_apps_list");
     if (requestId !== myAppsRequestId) {
       return;
     }
-    appsNotice.textContent = "Detected installations stay external; managed actions use their recorded method.";
+    myAppsEntries = snapshot.entries;
+    const updateLabel =
+      snapshot.updatesAvailable === 1
+        ? "1 reviewed update available"
+        : `${snapshot.updatesAvailable} reviewed updates available`;
+    appsUpdateBadge.hidden = snapshot.updatesAvailable === 0;
+    appsUpdateBadge.textContent = snapshot.updatesAvailable === 0 ? "" : String(snapshot.updatesAvailable);
+    appsOpenButton.setAttribute(
+      "aria-label",
+      snapshot.updatesAvailable === 0 ? "My Apps" : `My Apps, ${updateLabel}`,
+    );
+    appsNotice.textContent =
+      snapshot.updatesAvailable === 0
+        ? "Detected installations stay external; managed actions use their recorded method."
+        : `${updateLabel}. Review before installing; Arkonad will not update automatically.`;
     renderMyAppsList();
   } catch (error) {
     if (requestId !== myAppsRequestId) {
@@ -1791,3 +1885,4 @@ async function startSession(): Promise<void> {
 }
 
 void startSession();
+void refreshMyApps();
