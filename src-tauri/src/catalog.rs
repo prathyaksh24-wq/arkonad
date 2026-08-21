@@ -141,6 +141,12 @@ pub struct InstallMethod {
     pub rollback_limits: String,
     #[serde(default)]
     pub verification_command: Option<Vec<String>>,
+    #[serde(default)]
+    pub update_command: Option<Vec<String>>,
+    #[serde(default)]
+    pub repair_command: Option<Vec<String>>,
+    #[serde(default)]
+    pub uninstall_command: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -291,7 +297,7 @@ impl CatalogRuntime {
             .cloned()
     }
 
-    fn list(
+    pub(crate) fn list(
         &self,
         query: Option<&str>,
         category: Option<&str>,
@@ -532,14 +538,28 @@ fn validate_winget_method(
         .command
         .as_deref()
         .ok_or_else(|| format!("manifest {id} WinGet method has no exact command"))?;
+    validate_winget_command(command, package_id, "install", "installMethods.command", id)?;
+    if method.verification_command.is_none() {
+        return Err(format!(
+            "manifest {id} WinGet method has no verification command"
+        ));
+    }
+    Ok(())
+}
+
+fn validate_winget_command(
+    command: &[String],
+    package_id: &str,
+    verb: &str,
+    field: &str,
+    id: &str,
+) -> Result<(), String> {
     if command.first().map(String::as_str) != Some("winget.exe")
         && command.first().map(String::as_str) != Some("winget")
     {
-        return Err(format!(
-            "manifest {id} WinGet command must start with winget"
-        ));
+        return Err(format!("manifest {id} {field} must start with winget"));
     }
-    if !command.iter().any(|part| part == "install")
+    if !command.iter().any(|part| part == verb)
         || !command
             .windows(2)
             .any(|parts| parts[0] == "--id" && parts[1] == package_id)
@@ -549,12 +569,7 @@ fn validate_winget_method(
             .any(|parts| parts[0] == "--source" && parts[1] == "winget")
     {
         return Err(format!(
-            "manifest {id} WinGet command must pin the package and source"
-        ));
-    }
-    if method.verification_command.is_none() {
-        return Err(format!(
-            "manifest {id} WinGet method has no verification command"
+            "manifest {id} {field} must pin the package and source"
         ));
     }
     Ok(())
@@ -613,8 +628,51 @@ fn validate_install_methods(
         if let Some(command) = &method.verification_command {
             validate_argv(command, "installMethods.verificationCommand", id)?;
         }
+        for (field, command) in [
+            (
+                "installMethods.updateCommand",
+                method.update_command.as_deref(),
+            ),
+            (
+                "installMethods.repairCommand",
+                method.repair_command.as_deref(),
+            ),
+            (
+                "installMethods.uninstallCommand",
+                method.uninstall_command.as_deref(),
+            ),
+        ] {
+            if let Some(command) = command {
+                validate_argv(command, field, id)?;
+            }
+        }
         if method.kind.eq_ignore_ascii_case("winget") {
             validate_winget_method(method, platforms, id)?;
+            let package_id = method
+                .package_id
+                .as_deref()
+                .ok_or_else(|| format!("manifest {id} WinGet method has no package id"))?;
+            for (field, verb, command) in [
+                (
+                    "installMethods.updateCommand",
+                    "upgrade",
+                    method.update_command.as_deref(),
+                ),
+                (
+                    "installMethods.repairCommand",
+                    "repair",
+                    method.repair_command.as_deref(),
+                ),
+                (
+                    "installMethods.uninstallCommand",
+                    "uninstall",
+                    method.uninstall_command.as_deref(),
+                ),
+            ] {
+                if let Some(command) = command {
+                    validate_winget_command(command, package_id, verb, field, id)?;
+                }
+            }
         }
     }
     Ok(())
