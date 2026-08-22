@@ -24,6 +24,15 @@ pub struct CreateSessionRequest {
     pub shell: Option<String>,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LaunchProcessRequest {
+    pub executable: String,
+    pub arguments: Vec<String>,
+    pub shell: Option<String>,
+    pub cwd: String,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SessionInfo {
@@ -89,6 +98,60 @@ impl PtySession {
             },
             reader,
         ))
+    }
+
+    fn spawn_launch(
+        request: &LaunchProcessRequest,
+        size: PtySize,
+    ) -> io::Result<(Self, Box<dyn Read + Send>)> {
+        if request.executable.trim().is_empty() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "launch executable is empty",
+            ));
+        }
+        if request.executable.chars().any(char::is_control)
+            || request
+                .arguments
+                .iter()
+                .any(|argument| argument.chars().any(char::is_control))
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "launch command contains control characters",
+            ));
+        }
+
+        let mut command = if let Some(shell) = request.shell.as_deref() {
+            let mut command = CommandBuilder::new(shell);
+            if is_cmd_shell(shell) {
+                command.arg("/d");
+                command.arg("/c");
+                command.arg(build_cmd_command_line(
+                    &request.executable,
+                    &request.arguments,
+                ));
+            } else if is_powershell(shell) {
+                command.args(["-NoLogo", "-NoProfile", "-Command"]);
+                command.arg(build_powershell_command_line(
+                    &request.executable,
+                    &request.arguments,
+                ));
+            } else {
+                command.args([
+                    "-lc",
+                    &build_posix_command_line(&request.executable, &request.arguments),
+                ]);
+            }
+            command
+        } else {
+            let mut command = CommandBuilder::new(&request.executable);
+            command.args(&request.arguments);
+            command
+        };
+
+        command.cwd(Path::new(&request.cwd));
+        Self::spawn_command(command, size)
     }
 
     fn write(&self, data: &[u8]) -> io::Result<()> {
@@ -200,6 +263,40 @@ impl SessionManager {
         })
     }
 
+    pub(crate) fn create_launch(
+        &self,
+        request: LaunchProcessRequest,
+        app: AppHandle,
+        output: Channel<Vec<u8>>,
+    ) -> Result<SessionInfo, String> {
+        let cwd = resolve_cwd(Some(&request.cwd))?;
+        let size = PtySize {
+            cols: 120,
+            rows: 40,
+            pixel_width: 0,
+            pixel_height: 0,
+        };
+        let (pty, reader) = PtySession::spawn_launch(&request, size)
+            .map_err(|error| format!("could not start {}: {error}", request.executable))?;
+        let session = Arc::new(ManagedSession { pty });
+        let id = format!("session-{}", self.next_id.fetch_add(1, Ordering::Relaxed));
+
+        self.sessions
+            .lock()
+            .map_err(|_| "session registry lock is unavailable".to_owned())?
+            .insert(id.clone(), Arc::clone(&session));
+
+        spawn_output_bridge(id.clone(), session, reader, output, app);
+
+        Ok(SessionInfo {
+            id,
+            shell: request
+                .shell
+                .unwrap_or_else(|| "direct executable".to_owned()),
+            cwd: cwd.to_string_lossy().into_owned(),
+        })
+    }
+
     fn get(&self, id: &str) -> Result<Arc<ManagedSession>, String> {
         self.sessions
             .lock()
@@ -209,7 +306,7 @@ impl SessionManager {
             .ok_or_else(|| format!("unknown session: {id}"))
     }
 
-    fn close(&self, id: &str) -> Result<(), String> {
+    pub(crate) fn close(&self, id: &str) -> Result<(), String> {
         let session = self
             .sessions
             .lock()
@@ -398,6 +495,54 @@ fn is_powershell(executable: &str) -> bool {
         .unwrap_or(false)
 }
 
+fn is_cmd_shell(executable: &str) -> bool {
+    Path::new(executable)
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .map(|stem| stem.eq_ignore_ascii_case("cmd"))
+        .unwrap_or(false)
+}
+
+fn build_cmd_command_line(executable: &str, arguments: &[String]) -> String {
+    std::iter::once(executable)
+        .chain(arguments.iter().map(String::as_str))
+        .map(quote_cmd_argument)
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn quote_cmd_argument(value: &str) -> String {
+    if value.is_empty() || value.chars().any(char::is_whitespace) || value.contains('"') {
+        format!("\"{}\"", value.replace('"', "\\\""))
+    } else {
+        value.to_owned()
+    }
+}
+
+fn build_powershell_command_line(executable: &str, arguments: &[String]) -> String {
+    std::iter::once(executable)
+        .chain(arguments.iter().map(String::as_str))
+        .map(quote_powershell_argument)
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn quote_powershell_argument(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "''"))
+}
+
+fn build_posix_command_line(executable: &str, arguments: &[String]) -> String {
+    std::iter::once(executable)
+        .chain(arguments.iter().map(String::as_str))
+        .map(quote_posix_argument)
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn quote_posix_argument(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\\''"))
+}
+
 fn command_exists(command: &str) -> bool {
     if Path::new(command).components().count() > 1 {
         return Path::new(command).is_file();
@@ -418,6 +563,7 @@ fn command_exists(command: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::process::Command;
     use std::sync::mpsc::channel;
     use std::time::{Duration, Instant};
 
@@ -556,5 +702,56 @@ mod tests {
 
         session.kill();
         session.wait().expect("killed child should be reapable");
+    }
+
+    #[test]
+    fn pty_launches_a_declared_executable_directly() {
+        let Some(shell_name) = powershell() else {
+            return;
+        };
+        let Some(shell) = Command::new("where.exe")
+            .arg(&shell_name)
+            .output()
+            .ok()
+            .filter(|output| output.status.success())
+            .map(|output| {
+                String::from_utf8_lossy(&output.stdout)
+                    .lines()
+                    .find(|line| !line.trim().is_empty())
+                    .unwrap_or_default()
+                    .trim()
+                    .to_owned()
+            })
+            .filter(|path| !path.is_empty())
+        else {
+            return;
+        };
+        let request = LaunchProcessRequest {
+            executable: shell,
+            arguments: vec![
+                "-NoLogo".to_owned(),
+                "-NoProfile".to_owned(),
+                "-Command".to_owned(),
+                "Write-Output 'ARKONAD-LAUNCH'".to_owned(),
+            ],
+            shell: None,
+            cwd: env::current_dir()
+                .expect("test working directory should be available")
+                .to_string_lossy()
+                .into_owned(),
+        };
+        let (session, reader) = PtySession::spawn_launch(
+            &request,
+            PtySize {
+                cols: 80,
+                rows: 24,
+                pixel_width: 0,
+                pixel_height: 0,
+            },
+        )
+        .expect("declared executable should start in the PTY");
+
+        let output = read_until_marker(&session, reader, "ARKONAD-LAUNCH");
+        assert!(String::from_utf8_lossy(&output).contains("ARKONAD-LAUNCH"));
     }
 }

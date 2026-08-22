@@ -151,6 +151,8 @@ pub struct MyAppEntry {
     pub update_state: String,
     pub launchable: bool,
     pub executable_path: Option<String>,
+    pub launch_profile_id: Option<String>,
+    pub supports_working_directory: bool,
     pub source: String,
     pub last_checked_at: String,
     pub method_id: Option<String>,
@@ -1235,6 +1237,14 @@ fn my_app_entry(
         launchable: detection.is_some()
             || receipt.is_some_and(|receipt| Path::new(&receipt.executable_path).exists()),
         executable_path,
+        launch_profile_id: manifest
+            .launch_profiles
+            .first()
+            .map(|profile| profile.id.clone()),
+        supports_working_directory: manifest
+            .launch_profiles
+            .first()
+            .is_some_and(|profile| profile.working_directory.is_none()),
         source,
         last_checked_at: last_checked_at.to_owned(),
         method_id: receipt

@@ -641,6 +641,87 @@ select {
   margin-top: 7px;
 }
 
+.launch-location-row {
+  display: flex;
+  align-items: end;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.launch-control,
+.custom-app-field {
+  display: grid;
+  flex: 1 1 180px;
+  gap: 4px;
+  color: #7e8a95;
+  font-size: 10px;
+  text-transform: uppercase;
+}
+
+.launch-control select,
+.launch-location-input,
+.custom-app-field input,
+.custom-app-field textarea {
+  min-width: 0;
+  padding: 6px 7px;
+  border: 1px solid #303b45;
+  border-radius: 2px;
+  outline: none;
+  background: #10161b;
+  color: #e8ecef;
+  font-size: 11px;
+  text-transform: none;
+}
+
+.launch-control select:focus,
+.launch-location-input:focus,
+.custom-app-field input:focus,
+.custom-app-field textarea:focus {
+  border-color: #ff9c4a;
+  box-shadow: 0 0 0 1px rgba(255, 156, 74, 0.15);
+}
+
+.custom-app-list {
+  display: grid;
+  gap: 7px;
+  margin-top: 8px;
+}
+
+.custom-app-row,
+.custom-app-form {
+  display: grid;
+  gap: 7px;
+  padding: 8px;
+  border: 1px solid #202830;
+  background: #0c1014;
+}
+
+.custom-app-row-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  color: #cdd5da;
+  font-size: 11px;
+}
+
+.custom-app-form {
+  margin-top: 8px;
+}
+
+.custom-app-check {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: #a9b3ba;
+  font-size: 11px;
+}
+
+.custom-app-check input {
+  accent-color: #ff9c4a;
+}
+
 .install-step-hint {
   color: #68737d;
   font-size: 10px;
