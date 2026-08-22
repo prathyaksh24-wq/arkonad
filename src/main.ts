@@ -3,7 +3,6 @@ import "./style.css";
 
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { readText, writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { FitAddon } from "@xterm/addon-fit";
 import { SearchAddon } from "@xterm/addon-search";
 import { WebglAddon } from "@xterm/addon-webgl";
@@ -18,6 +17,45 @@ type SessionInfo = {
 
 type SessionExited = {
   id: string;
+};
+
+type SplitOrientation = "vertical" | "horizontal";
+type FocusDirection = "left" | "right" | "up" | "down";
+
+type LayoutNode =
+  | { kind: "leaf"; paneId: string }
+  | {
+      kind: "split";
+      orientation: SplitOrientation;
+      ratio: number;
+      first: LayoutNode;
+      second: LayoutNode;
+    };
+
+type FramePane = {
+  id: string;
+  session: SessionInfo;
+};
+
+type FrameTab = {
+  id: string;
+  title: string;
+  root: LayoutNode;
+  panes: FramePane[];
+  focusedPaneId: string;
+};
+
+type FrameSnapshot = {
+  tabs: FrameTab[];
+  activeTabId: string | null;
+  focusedPaneId: string | null;
+};
+
+type FrameCloseResult = {
+  closed: boolean;
+  requiresConfirmation: boolean;
+  message: string;
+  snapshot: FrameSnapshot;
 };
 
 type CatalogCategory = "agent" | "productivity" | "git";
@@ -338,21 +376,45 @@ app.innerHTML = `
       <div class="brand"><span class="ember">◆</span><span>arkonad</span></div>
       <div class="session-meta" data-session-meta>starting terminal session…</div>
       <button class="topbar-action" type="button" data-launchpad-open aria-expanded="false">
-        Launchpad <span class="key-hint">Ctrl+Shift+L</span>
+        Launchpad <span class="key-hint">palette</span>
       </button>
       <button class="topbar-action" type="button" data-store-open aria-expanded="false">
-        Store <span class="key-hint">Ctrl+Shift+Space</span>
+        Store <span class="key-hint">palette</span>
       </button>
       <button class="topbar-action" type="button" data-apps-open aria-expanded="false">
         My Apps <span class="apps-update-badge" data-apps-update-badge hidden aria-live="polite"></span>
-        <span class="key-hint">Ctrl+Shift+A</span>
+        <span class="key-hint">palette</span>
       </button>
       <div class="status" data-status>connecting</div>
     </header>
     <main class="workspace">
       <section class="terminal-shell" data-terminal-shell>
-        <div class="terminal" data-terminal></div>
+        <div class="frame-tabs" data-frame-tabs role="tablist" aria-label="Arkonad sessions"></div>
+        <div class="frame-layout" data-frame-layout aria-label="Arkonad workspace"></div>
         <div class="error-panel" data-error hidden></div>
+      </section>
+      <section class="command-overlay" data-command-overlay hidden aria-label="Arkonad command palette">
+        <div class="command-card">
+          <div class="command-heading">
+            <div>
+              <span class="store-eyebrow">ARKONAD LEADER</span>
+              <span class="store-title">Command palette</span>
+            </div>
+            <button class="store-close" type="button" data-command-close>Esc · close</button>
+          </div>
+          <label class="store-control command-search-control">
+            <span>Command</span>
+            <input data-command-search type="search" placeholder="Type a command" autocomplete="off" />
+          </label>
+          <div class="command-list" data-command-list role="listbox" aria-label="Arkonad commands"></div>
+          <div class="command-message" data-command-message aria-live="polite"></div>
+          <div class="store-footer command-footer">
+            <span>↑↓ move</span>
+            <span>Enter run</span>
+            <span data-leader-hint>Leader Ctrl+Space</span>
+            <span>Esc close</span>
+          </div>
+        </div>
       </section>
       <section class="store-shell" data-launchpad-view hidden aria-label="Launchpad">
         <div class="store-toolbar">
@@ -381,7 +443,7 @@ app.innerHTML = `
         <div class="store-footer">
           <span>↑↓ move</span>
           <span>Enter launch details</span>
-          <span>Ctrl+Shift+L close</span>
+          <span>Leader palette</span>
           <span>Esc terminal</span>
         </div>
       </section>
@@ -421,7 +483,7 @@ app.innerHTML = `
         <div class="store-footer">
           <span>↑↓ move</span>
           <span>Enter details</span>
-          <span>Ctrl+Shift+Space close</span>
+          <span>Leader palette</span>
           <span>Esc terminal</span>
         </div>
       </section>
@@ -452,25 +514,26 @@ app.innerHTML = `
         <div class="store-footer">
           <span>↑↓ move</span>
           <span>Enter details</span>
-          <span>Ctrl+Shift+A close</span>
+          <span>Leader palette</span>
           <span>Esc terminal</span>
         </div>
       </section>
     </main>
     <footer class="bottombar">
-      <span>Leader+Space controls</span>
-      <span>Ctrl+Shift+L Launchpad</span>
-      <span>Ctrl+Shift+C copy</span>
-      <span>Ctrl+Shift+V paste</span>
-      <span>Ctrl+Shift+Space Store</span>
-      <span>Ctrl+Shift+A My Apps</span>
+      <span>Leader opens commands</span>
+      <span>Palette: Launch App</span>
+      <span>Palette: Store</span>
+      <span>Palette: My Apps</span>
+      <span>Palette: New Tab</span>
+      <span>Palette: Split</span>
       <span data-cwd></span>
     </footer>
   </section>
 `;
 
 const terminalShell = app.querySelector<HTMLElement>("[data-terminal-shell]")!;
-const terminalElement = app.querySelector<HTMLDivElement>("[data-terminal]")!;
+const frameTabs = app.querySelector<HTMLDivElement>("[data-frame-tabs]")!;
+const frameLayout = app.querySelector<HTMLDivElement>("[data-frame-layout]")!;
 const sessionMeta = app.querySelector<HTMLDivElement>("[data-session-meta]")!;
 const status = app.querySelector<HTMLDivElement>("[data-status]")!;
 const cwdLabel = app.querySelector<HTMLSpanElement>("[data-cwd]")!;
@@ -504,10 +567,17 @@ const appsCount = app.querySelector<HTMLSpanElement>("[data-apps-count]")!;
 const appsList = app.querySelector<HTMLDivElement>("[data-apps-list]")!;
 const appsError = app.querySelector<HTMLDivElement>("[data-apps-error]")!;
 const appsDetail = app.querySelector<HTMLElement>("[data-apps-detail]")!;
+const commandOverlay = app.querySelector<HTMLElement>("[data-command-overlay]")!;
+const commandCloseButton = app.querySelector<HTMLButtonElement>("[data-command-close]")!;
+const commandSearch = app.querySelector<HTMLInputElement>("[data-command-search]")!;
+const commandList = app.querySelector<HTMLDivElement>("[data-command-list]")!;
+const commandMessage = app.querySelector<HTMLDivElement>("[data-command-message]")!;
+const leaderHint = app.querySelector<HTMLSpanElement>("[data-leader-hint]")!;
 
 if (
   !terminalShell ||
-  !terminalElement ||
+  !frameTabs ||
+  !frameLayout ||
   !sessionMeta ||
   !status ||
   !cwdLabel ||
@@ -540,52 +610,31 @@ if (
   !appsCount ||
   !appsList ||
   !appsError ||
-  !appsDetail
+  !appsDetail ||
+  !commandOverlay ||
+  !commandCloseButton ||
+  !commandSearch ||
+  !commandList ||
+  !commandMessage ||
+  !leaderHint
 ) {
   throw new Error("Arkonad frame elements are missing");
 }
 
-const terminal = new Terminal({
-  allowProposedApi: false,
-  convertEol: false,
-  cursorBlink: true,
-  fontFamily: '"Cascadia Mono", "Cascadia Code", Consolas, monospace',
-  fontSize: 14,
-  scrollback: 10_000,
-  theme: {
-    background: "#090b0e",
-    foreground: "#e8ecef",
-    cursor: "#ff9c4a",
-    cursorAccent: "#090b0e",
-    selectionBackground: "#36404a",
-    black: "#090b0e",
-    red: "#ff766b",
-    green: "#9ed67a",
-    yellow: "#ffcf70",
-    blue: "#83b8ff",
-    magenta: "#d8a3ff",
-    cyan: "#7bd7d1",
-    white: "#e8ecef",
-    brightBlack: "#68737d",
-    brightWhite: "#ffffff",
-  },
-});
+type PaneRuntime = {
+  pane: FramePane;
+  host: HTMLDivElement;
+  terminalHost: HTMLDivElement;
+  terminal: Terminal;
+  fitAddon: FitAddon;
+};
 
-const fitAddon = new FitAddon();
-terminal.loadAddon(fitAddon);
-terminal.loadAddon(new SearchAddon());
-terminal.loadAddon(new WebLinksAddon());
-
-try {
-  terminal.loadAddon(new WebglAddon());
-} catch {
-  // WebGL is an optional renderer. xterm's DOM renderer remains the fallback.
-}
-
-terminal.open(terminalElement);
-fitAddon.fit();
-terminal.focus();
-
+const paneRuntimes = new Map<string, PaneRuntime>();
+let frameSnapshot: FrameSnapshot = {
+  tabs: [],
+  activeTabId: null,
+  focusedPaneId: null,
+};
 let session: SessionInfo | undefined;
 let resizeTimer: number | undefined;
 let terminalStatusText = "connecting";
@@ -608,6 +657,11 @@ let myAppsRefreshTimer: number | undefined;
 let customAppEntries: CustomAppProfile[] = [];
 let editingCustomAppId: string | undefined;
 let launchBusy = false;
+let commandOverlayOpen = false;
+let selectedCommandId: string | undefined;
+let pendingClose: "pane" | "tab" | undefined;
+const leaderStorageKey = "arkonad.leader-chord";
+let leaderChord = localStorage.getItem(leaderStorageKey) ?? "ctrl+space";
 
 function renderTerminalStatus(): void {
   status.textContent = terminalStatusText;
@@ -621,7 +675,7 @@ function renderTerminalStatus(): void {
 function setTerminalStatus(text: string, state = ""): void {
   terminalStatusText = text;
   terminalStatusState = state;
-  if (!storeOpen) {
+  if (!storeOpen && !commandOverlayOpen) {
     renderTerminalStatus();
   }
 }
@@ -632,21 +686,42 @@ function showError(message: string): void {
   errorPanel.textContent = message;
 }
 
-function sendResize(): void {
-  if (!session) {
-    return;
+function focusedPane(): FramePane | undefined {
+  const activeTab = frameSnapshot.tabs.find((tab) => tab.id === frameSnapshot.activeTabId);
+  if (!activeTab) {
+    return undefined;
   }
+  return activeTab.panes.find((pane) => pane.id === activeTab.focusedPaneId);
+}
 
-  const dimensions = fitAddon.proposeDimensions();
+function paneForSession(sessionId: string): FramePane | undefined {
+  return frameSnapshot.tabs
+    .flatMap((tab) => tab.panes)
+    .find((pane) => pane.session.id === sessionId);
+}
+
+function updateFocusedSession(): void {
+  session = focusedPane()?.session;
+  sessionMeta.textContent = session?.shell ?? "no active session";
+  cwdLabel.textContent = session?.cwd ?? "";
+}
+
+function sendResizeForPane(runtime: PaneRuntime): void {
+  const dimensions = runtime.fitAddon.proposeDimensions();
   if (!dimensions) {
     return;
   }
-
   void invoke("resize_session", {
-    id: session.id,
+    id: runtime.pane.session.id,
     cols: dimensions.cols,
     rows: dimensions.rows,
   }).catch((error: unknown) => showError(String(error)));
+}
+
+function sendResize(): void {
+  for (const runtime of paneRuntimes.values()) {
+    sendResizeForPane(runtime);
+  }
 }
 
 function scheduleResize(): void {
@@ -669,6 +744,654 @@ function makeElement<K extends keyof HTMLElementTagNameMap>(
     element.textContent = text;
   }
   return element;
+}
+
+function createPaneRuntime(pane: FramePane): PaneRuntime {
+  const host = makeElement("section", "frame-pane") as HTMLDivElement;
+  host.dataset.paneId = pane.id;
+  host.tabIndex = -1;
+
+  const header = makeElement("div", "pane-header");
+  header.append(makeElement("span", "pane-title", pane.session.shell));
+  header.append(makeElement("span", "pane-cwd", pane.session.cwd));
+
+  const terminalHost = makeElement("div", "terminal") as HTMLDivElement;
+  host.append(header, terminalHost);
+
+  const terminal = new Terminal({
+    allowProposedApi: false,
+    convertEol: false,
+    cursorBlink: true,
+    fontFamily: '"Cascadia Mono", "Cascadia Code", Consolas, monospace',
+    fontSize: 14,
+    scrollback: 10_000,
+    theme: {
+      background: "#090b0e",
+      foreground: "#e8ecef",
+      cursor: "#ff9c4a",
+      cursorAccent: "#090b0e",
+      selectionBackground: "#36404a",
+      black: "#090b0e",
+      red: "#ff766b",
+      green: "#9ed67a",
+      yellow: "#ffcf70",
+      blue: "#83b8ff",
+      magenta: "#d8a3ff",
+      cyan: "#7bd7d1",
+      white: "#e8ecef",
+      brightBlack: "#68737d",
+      brightWhite: "#ffffff",
+    },
+  });
+  const fitAddon = new FitAddon();
+  terminal.loadAddon(fitAddon);
+  terminal.loadAddon(new SearchAddon());
+  terminal.loadAddon(new WebLinksAddon());
+  try {
+    terminal.loadAddon(new WebglAddon());
+  } catch {
+    // WebGL is optional; xterm's DOM renderer remains the fallback.
+  }
+
+  terminal.onData((data) => {
+    void invoke("write_session", {
+      id: pane.session.id,
+      data: new TextEncoder().encode(data),
+    }).catch((error: unknown) => showError(String(error)));
+  });
+  terminalHost.addEventListener("focusin", () => {
+    if (frameSnapshot.focusedPaneId !== pane.id) {
+      void focusPaneFromUser(pane.id);
+    }
+  });
+  host.addEventListener("mousedown", () => {
+    if (frameSnapshot.focusedPaneId !== pane.id) {
+      void focusPaneFromUser(pane.id);
+    }
+  });
+  terminal.open(terminalHost);
+
+  return { pane, host, terminalHost, terminal, fitAddon };
+}
+
+function ensurePaneRuntime(pane: FramePane): PaneRuntime {
+  const existing = paneRuntimes.get(pane.id);
+  if (existing) {
+    existing.pane = pane;
+    const title = existing.host.querySelector<HTMLElement>(".pane-title");
+    const cwd = existing.host.querySelector<HTMLElement>(".pane-cwd");
+    if (title) {
+      title.textContent = pane.session.shell;
+    }
+    if (cwd) {
+      cwd.textContent = pane.session.cwd;
+    }
+    return existing;
+  }
+  const created = createPaneRuntime(pane);
+  paneRuntimes.set(pane.id, created);
+  return created;
+}
+
+function writeToPane(sessionId: string, chunk: Uint8Array): void {
+  for (const runtime of paneRuntimes.values()) {
+    if (runtime.pane.session.id === sessionId) {
+      runtime.terminal.write(chunk);
+      return;
+    }
+  }
+}
+
+function renderLayoutNode(node: LayoutNode, tab: FrameTab, parent: HTMLElement): void {
+  if (node.kind === "leaf") {
+    const pane = tab.panes.find((candidate) => candidate.id === node.paneId);
+    if (!pane) {
+      return;
+    }
+    const runtime = ensurePaneRuntime(pane);
+    runtime.host.classList.toggle("is-focused", tab.focusedPaneId === pane.id);
+    parent.append(runtime.host);
+    return;
+  }
+
+  const split = makeElement("div", `frame-split split-${node.orientation}`) as HTMLDivElement;
+  const ratio = Math.min(0.85, Math.max(0.15, node.ratio)) * 100;
+  if (node.orientation === "vertical") {
+    split.style.gridTemplateColumns = `${ratio}fr ${100 - ratio}fr`;
+  } else {
+    split.style.gridTemplateRows = `${ratio}fr ${100 - ratio}fr`;
+  }
+  renderLayoutNode(node.first, tab, split);
+  renderLayoutNode(node.second, tab, split);
+  parent.append(split);
+}
+
+function renderFrame(nextSnapshot: FrameSnapshot, focusActive = true): void {
+  frameSnapshot = nextSnapshot;
+  updateFocusedSession();
+
+  const visiblePaneIds = new Set(
+    frameSnapshot.tabs.flatMap((tab) => tab.panes.map((pane) => pane.id)),
+  );
+  for (const [paneId, runtime] of paneRuntimes) {
+    if (!visiblePaneIds.has(paneId)) {
+      runtime.terminal.dispose();
+      runtime.host.remove();
+      paneRuntimes.delete(paneId);
+    }
+  }
+
+  frameTabs.replaceChildren();
+  for (const tab of frameSnapshot.tabs) {
+    const button = makeElement("button", "frame-tab") as HTMLButtonElement;
+    button.type = "button";
+    button.role = "tab";
+    button.ariaSelected = tab.id === frameSnapshot.activeTabId ? "true" : "false";
+    button.classList.toggle("is-active", tab.id === frameSnapshot.activeTabId);
+    button.dataset.tabId = tab.id;
+    button.textContent = `${tab.title} · ${tab.panes.length}`;
+    button.addEventListener("click", () => {
+      void activateTab(tab.id);
+    });
+    frameTabs.append(button);
+  }
+
+  frameLayout.replaceChildren();
+  const activeTab = frameSnapshot.tabs.find((tab) => tab.id === frameSnapshot.activeTabId);
+  if (activeTab) {
+    renderLayoutNode(activeTab.root, activeTab, frameLayout);
+  } else {
+    frameLayout.append(
+      makeElement("div", "frame-empty", "No active session. Open the command palette to create one."),
+    );
+  }
+
+  window.requestAnimationFrame(() => {
+    sendResize();
+    if (focusActive && frameSnapshot.focusedPaneId) {
+      paneRuntimes.get(frameSnapshot.focusedPaneId)?.terminal.focus();
+    }
+  });
+}
+
+async function focusPaneFromUser(paneId: string): Promise<void> {
+  try {
+    renderFrame(await invoke<FrameSnapshot>("frame_focus_pane", { paneId }), false);
+    paneRuntimes.get(paneId)?.terminal.focus();
+  } catch (error) {
+    showError(`Could not focus the pane: ${String(error)}`);
+  }
+}
+
+async function activateTab(tabId: string): Promise<void> {
+  try {
+    renderFrame(await invoke<FrameSnapshot>("frame_activate_tab", { tabId }));
+  } catch (error) {
+    showError(`Could not activate the tab: ${String(error)}`);
+  }
+}
+
+async function moveTab(offset: number): Promise<void> {
+  if (frameSnapshot.tabs.length < 2) {
+    showCommandMessage("There is only one open tab.");
+    return;
+  }
+  const currentIndex = frameSnapshot.tabs.findIndex((tab) => tab.id === frameSnapshot.activeTabId);
+  const nextIndex = (Math.max(0, currentIndex) + offset + frameSnapshot.tabs.length) % frameSnapshot.tabs.length;
+  await activateTab(frameSnapshot.tabs[nextIndex].id);
+}
+
+type FrameCommand = {
+  id: string;
+  label: string;
+  description: string;
+  run: () => void | Promise<void>;
+};
+
+function normalizedLeader(value: string): string {
+  const parts = value
+    .toLowerCase()
+    .split("+")
+    .map((part) => part.trim())
+    .filter(Boolean);
+  const key = parts.at(-1);
+  if (!key || (key !== "space" && !/^[a-z0-9]+$/.test(key))) {
+    return "ctrl+space";
+  }
+  const modifiers = ["ctrl", "alt", "shift", "meta"].filter((modifier) =>
+    parts.includes(modifier),
+  );
+  if (modifiers.length === 0) {
+    return "ctrl+space";
+  }
+  return [...new Set([...modifiers, key])].join("+");
+}
+
+function leaderLabel(): string {
+  return leaderChord
+    .split("+")
+    .map((part) => (part === "space" ? "Space" : part.length === 1 ? part.toUpperCase() : `${part[0].toUpperCase()}${part.slice(1)}`))
+    .join("+");
+}
+
+function eventMatchesLeader(event: KeyboardEvent): boolean {
+  const parts = leaderChord.split("+");
+  const key = parts.at(-1);
+  const eventKey = event.key === " " ? "space" : event.key.toLowerCase();
+  return (
+    key === eventKey &&
+    event.ctrlKey === parts.includes("ctrl") &&
+    event.altKey === parts.includes("alt") &&
+    event.shiftKey === parts.includes("shift") &&
+    event.metaKey === parts.includes("meta")
+  );
+}
+
+function showCommandMessage(message: string): void {
+  commandMessage.replaceChildren(makeElement("span", undefined, message));
+}
+
+function showSettings(): void {
+  commandMessage.replaceChildren();
+  const title = makeElement("strong", "command-message-title", "Leader chord");
+  const description = makeElement(
+    "p",
+    "command-message-description",
+    "Choose the only chord Arkonad captures. Every other key stays with the focused session.",
+  );
+  const row = makeElement("div", "command-settings-row");
+  const input = makeElement("input", "command-settings-input") as HTMLInputElement;
+  input.type = "text";
+  input.value = leaderChord;
+  input.placeholder = "ctrl+space";
+  input.setAttribute("aria-label", "Leader chord");
+  const save = makeElement("button", "detail-action", "Save") as HTMLButtonElement;
+  save.type = "button";
+  save.addEventListener("click", () => {
+    leaderChord = normalizedLeader(input.value);
+    localStorage.setItem(leaderStorageKey, leaderChord);
+    leaderHint.textContent = `Leader ${leaderLabel()}`;
+    showCommandMessage(`Leader saved as ${leaderLabel()}.`);
+  });
+  row.append(input, save);
+  commandMessage.append(title, description, row);
+  input.focus();
+  input.select();
+}
+
+function frameCommands(): FrameCommand[] {
+  return [
+    {
+      id: "store",
+      label: "Store",
+      description: "Browse and install Catalog Tools.",
+      run: () => {
+        closeCommandOverlay();
+        openStore();
+      },
+    },
+    {
+      id: "my-apps",
+      label: "My Apps",
+      description: "Manage installed and detected tools.",
+      run: () => {
+        closeCommandOverlay();
+        openMyApps();
+      },
+    },
+    {
+      id: "launch-app",
+      label: "Launch App",
+      description: "Open Launchpad and choose a Launchable Tool.",
+      run: () => {
+        closeCommandOverlay();
+        openLaunchpad();
+      },
+    },
+    {
+      id: "new-session",
+      label: "Session · New Tab",
+      description: "Start another shell session in a new tab.",
+      run: createFrameTab,
+    },
+    {
+      id: "previous-tab",
+      label: "Session · Previous Tab",
+      description: "Focus the tab to the left of the active tab.",
+      run: () => moveTab(-1),
+    },
+    {
+      id: "next-tab",
+      label: "Session · Next Tab",
+      description: "Focus the tab to the right of the active tab.",
+      run: () => moveTab(1),
+    },
+    {
+      id: "split-right",
+      label: "Split · Right",
+      description: "Create a session beside the focused pane.",
+      run: () => splitFrame("vertical"),
+    },
+    {
+      id: "split-down",
+      label: "Split · Down",
+      description: "Create a session below the focused pane.",
+      run: () => splitFrame("horizontal"),
+    },
+    {
+      id: "focus-left",
+      label: "Focus · Left",
+      description: "Move focus to the nearest pane on the left.",
+      run: () => moveFocusedPane("left"),
+    },
+    {
+      id: "focus-right",
+      label: "Focus · Right",
+      description: "Move focus to the nearest pane on the right.",
+      run: () => moveFocusedPane("right"),
+    },
+    {
+      id: "focus-up",
+      label: "Focus · Up",
+      description: "Move focus to the nearest pane above.",
+      run: () => moveFocusedPane("up"),
+    },
+    {
+      id: "focus-down",
+      label: "Focus · Down",
+      description: "Move focus to the nearest pane below.",
+      run: () => moveFocusedPane("down"),
+    },
+    {
+      id: "resize-left",
+      label: "Resize · Left",
+      description: "Make the focused pane's split smaller.",
+      run: () => resizeFocusedPane("left"),
+    },
+    {
+      id: "resize-right",
+      label: "Resize · Right",
+      description: "Make the focused pane's split larger.",
+      run: () => resizeFocusedPane("right"),
+    },
+    {
+      id: "resize-up",
+      label: "Resize · Up",
+      description: "Make the focused pane's horizontal split smaller.",
+      run: () => resizeFocusedPane("up"),
+    },
+    {
+      id: "resize-down",
+      label: "Resize · Down",
+      description: "Make the focused pane's horizontal split larger.",
+      run: () => resizeFocusedPane("down"),
+    },
+    {
+      id: "close-pane",
+      label: "Session · Close Focused Pane",
+      description: "Close only the focused session after a running-process warning.",
+      run: () => closeFocusedPane(pendingClose === "pane"),
+    },
+    {
+      id: "close-tab",
+      label: "Session · Close Active Tab",
+      description: "Close every pane in the active tab after a running-process warning.",
+      run: () => closeActiveTab(pendingClose === "tab"),
+    },
+    {
+      id: "attention",
+      label: "Attention",
+      description: "Review sessions that need user attention.",
+      run: () => showCommandMessage("Attention queue is ready for Managed Agent status integration."),
+    },
+    {
+      id: "repository",
+      label: "Repository",
+      description: "Open repository controls for the focused session.",
+      run: () => showCommandMessage("Repository view will use the focused session's Repository Context."),
+    },
+    {
+      id: "settings",
+      label: "Settings",
+      description: "Change the configurable Leader chord.",
+      run: showSettings,
+    },
+  ];
+}
+
+function visibleFrameCommands(): FrameCommand[] {
+  const query = commandSearch.value.trim().toLowerCase();
+  return frameCommands().filter(
+    (command) =>
+      !query || `${command.label} ${command.description}`.toLowerCase().includes(query),
+  );
+}
+
+function renderCommandList(): void {
+  const commands = visibleFrameCommands();
+  if (!commands.some((command) => command.id === selectedCommandId)) {
+    selectedCommandId = commands[0]?.id;
+  }
+  commandList.replaceChildren();
+  if (commands.length === 0) {
+    commandList.append(makeElement("p", "detail-empty", "No commands match this search."));
+    return;
+  }
+  for (const command of commands) {
+    const button = makeElement("button", "command-row") as HTMLButtonElement;
+    button.type = "button";
+    button.role = "option";
+    button.ariaSelected = command.id === selectedCommandId ? "true" : "false";
+    button.dataset.commandId = command.id;
+    const label = makeElement("span", "command-row-label", command.label);
+    const description = makeElement("span", "command-row-description", command.description);
+    button.append(label, description);
+    button.addEventListener("click", () => {
+      selectedCommandId = command.id;
+      void executeSelectedCommand();
+    });
+    commandList.append(button);
+  }
+}
+
+async function executeSelectedCommand(): Promise<void> {
+  const command = frameCommands().find((candidate) => candidate.id === selectedCommandId);
+  if (!command) {
+    return;
+  }
+  await command.run();
+  if (command.id !== "close-pane" && command.id !== "close-tab" && command.id !== "settings") {
+    pendingClose = undefined;
+  }
+  renderCommandList();
+  if (commandOverlayOpen && command.id !== "settings") {
+    commandSearch.focus();
+  }
+}
+
+function moveCommandSelection(offset: number): void {
+  const commands = visibleFrameCommands();
+  if (commands.length === 0) {
+    return;
+  }
+  const currentIndex = Math.max(
+    0,
+    commands.findIndex((command) => command.id === selectedCommandId),
+  );
+  selectedCommandId = commands[(currentIndex + offset + commands.length) % commands.length].id;
+  renderCommandList();
+  commandList.querySelector<HTMLButtonElement>(`[data-command-id="${selectedCommandId}"]`)?.focus();
+}
+
+function openCommandOverlay(): void {
+  if (storeOpen) {
+    closeSurface();
+  }
+  commandOverlayOpen = true;
+  commandOverlay.hidden = false;
+  selectedCommandId = undefined;
+  commandMessage.replaceChildren();
+  leaderHint.textContent = `Leader ${leaderLabel()}`;
+  renderCommandList();
+  commandSearch.value = "";
+  window.requestAnimationFrame(() => commandSearch.focus());
+}
+
+function closeCommandOverlay(): void {
+  commandOverlayOpen = false;
+  commandOverlay.hidden = true;
+  pendingClose = undefined;
+  commandMessage.replaceChildren();
+  renderTerminalStatus();
+  paneRuntimes.get(frameSnapshot.focusedPaneId ?? "")?.terminal.focus();
+}
+
+function frameRequest(): { cols: number; rows: number; cwd: string | null; shell: string | null } {
+  const runtime = frameSnapshot.focusedPaneId
+    ? paneRuntimes.get(frameSnapshot.focusedPaneId)
+    : undefined;
+  const dimensions = runtime?.fitAddon.proposeDimensions();
+  return {
+    cols: dimensions?.cols ?? 120,
+    rows: dimensions?.rows ?? 40,
+    cwd: focusedPane()?.session.cwd ?? null,
+    shell: null,
+  };
+}
+
+async function createFrameTab(): Promise<void> {
+  const output = new Channel<Uint8Array>();
+  const pendingOutput: Uint8Array[] = [];
+  let outputSessionId: string | undefined;
+  let accepted = false;
+  output.onmessage = (chunk) => {
+    if (accepted && outputSessionId) {
+      writeToPane(outputSessionId, chunk);
+    } else {
+      pendingOutput.push(chunk);
+    }
+  };
+
+  try {
+    const nextSnapshot = await invoke<FrameSnapshot>("frame_create_tab", {
+      request: frameRequest(),
+      onOutput: output,
+    });
+    outputSessionId = nextSnapshot.focusedPaneId
+      ? nextSnapshot.tabs
+          .flatMap((tab) => tab.panes)
+          .find((pane) => pane.id === nextSnapshot.focusedPaneId)?.session.id
+      : undefined;
+    renderFrame(nextSnapshot);
+    accepted = true;
+    if (outputSessionId) {
+      for (const chunk of pendingOutput) {
+        writeToPane(outputSessionId, chunk);
+      }
+    }
+    setTerminalStatus("ready", "ready");
+    closeCommandOverlay();
+  } catch (error) {
+    showError(`Could not create a tab: ${String(error)}`);
+  }
+}
+
+async function splitFrame(orientation: SplitOrientation): Promise<void> {
+  const output = new Channel<Uint8Array>();
+  const pendingOutput: Uint8Array[] = [];
+  let outputSessionId: string | undefined;
+  let accepted = false;
+  output.onmessage = (chunk) => {
+    if (accepted && outputSessionId) {
+      writeToPane(outputSessionId, chunk);
+    } else {
+      pendingOutput.push(chunk);
+    }
+  };
+
+  try {
+    const nextSnapshot = await invoke<FrameSnapshot>("frame_create_split", {
+      request: frameRequest(),
+      orientation,
+      onOutput: output,
+    });
+    outputSessionId = nextSnapshot.focusedPaneId
+      ? nextSnapshot.tabs
+          .flatMap((tab) => tab.panes)
+          .find((pane) => pane.id === nextSnapshot.focusedPaneId)?.session.id
+      : undefined;
+    renderFrame(nextSnapshot);
+    accepted = true;
+    if (outputSessionId) {
+      for (const chunk of pendingOutput) {
+        writeToPane(outputSessionId, chunk);
+      }
+    }
+    setTerminalStatus("ready", "ready");
+    closeCommandOverlay();
+  } catch (error) {
+    showError(`Could not split the focused pane: ${String(error)}`);
+  }
+}
+
+async function moveFocusedPane(direction: FocusDirection): Promise<void> {
+  try {
+    renderFrame(await invoke<FrameSnapshot>("frame_focus_move", { direction }));
+  } catch (error) {
+    showError(`Could not move pane focus: ${String(error)}`);
+  }
+}
+
+async function resizeFocusedPane(direction: FocusDirection): Promise<void> {
+  try {
+    renderFrame(
+      await invoke<FrameSnapshot>("frame_resize_split", {
+        direction,
+        amount: 0.08,
+      }),
+      false,
+    );
+    closeCommandOverlay();
+  } catch (error) {
+    showError(`Could not resize the focused split: ${String(error)}`);
+  }
+}
+
+async function closeFocusedPane(force: boolean): Promise<void> {
+  try {
+    const result = await invoke<FrameCloseResult>("frame_close_focused", { force });
+    if (result.requiresConfirmation) {
+      pendingClose = "pane";
+      commandMessage.textContent = `${result.message} Choose Close Focused Pane again to confirm.`;
+      return;
+    }
+    pendingClose = undefined;
+    renderFrame(result.snapshot);
+    commandMessage.textContent = result.message;
+    setTerminalStatus("ready", "ready");
+  } catch (error) {
+    showError(`Could not close the focused pane: ${String(error)}`);
+  }
+}
+
+async function closeActiveTab(force: boolean): Promise<void> {
+  try {
+    const result = await invoke<FrameCloseResult>("frame_close_tab", {
+      tabId: frameSnapshot.activeTabId,
+      force,
+    });
+    if (result.requiresConfirmation) {
+      pendingClose = "tab";
+      commandMessage.textContent = `${result.message} Choose Close Active Tab again to confirm.`;
+      return;
+    }
+    pendingClose = undefined;
+    renderFrame(result.snapshot);
+    commandMessage.textContent = result.message;
+    setTerminalStatus("ready", "ready");
+  } catch (error) {
+    showError(`Could not close the active tab: ${String(error)}`);
+  }
 }
 
 function appendDetailSection(parent: HTMLElement, title: string): HTMLElement {
@@ -812,13 +1535,13 @@ async function launchTarget(target: LaunchTarget, location: LaunchLocation): Pro
   }
 
   launchBusy = true;
-  const previousSessionId = session?.id;
   const output = new Channel<Uint8Array>();
   const pendingOutput: Uint8Array[] = [];
+  let outputSessionId: string | undefined;
   let sessionAccepted = false;
   output.onmessage = (chunk) => {
-    if (sessionAccepted) {
-      terminal.write(chunk);
+    if (sessionAccepted && outputSessionId) {
+      writeToPane(outputSessionId, chunk);
     } else {
       pendingOutput.push(chunk);
     }
@@ -830,18 +1553,18 @@ async function launchTarget(target: LaunchTarget, location: LaunchLocation): Pro
         appId: target.id,
         profileId: target.profileId,
         location,
-        currentDirectory: session?.cwd ?? null,
+        currentDirectory: focusedPane()?.session.cwd ?? null,
       },
       onOutput: output,
     });
-    session = nextSession;
-    terminal.clear();
+    outputSessionId = nextSession.id;
+    const nextSnapshot = await invoke<FrameSnapshot>("frame_attach_session", {
+      session: nextSession,
+    });
+    renderFrame(nextSnapshot);
     sessionAccepted = true;
     for (const chunk of pendingOutput) {
-      terminal.write(chunk);
-    }
-    if (previousSessionId && previousSessionId !== nextSession.id) {
-      await invoke("close_session", { id: previousSessionId }).catch(() => undefined);
+      writeToPane(nextSession.id, chunk);
     }
     cwdLabel.textContent = nextSession.cwd;
     launchBusy = false;
@@ -849,7 +1572,7 @@ async function launchTarget(target: LaunchTarget, location: LaunchLocation): Pro
     sessionMeta.textContent = `${target.name} · ${nextSession.shell}`;
     setTerminalStatus("ready", "ready");
     sendResize();
-    terminal.focus();
+    paneRuntimes.get(frameSnapshot.focusedPaneId ?? "")?.terminal.focus();
     void refreshLaunchpad();
     void refreshMyApps();
   } catch (error) {
@@ -2373,7 +3096,7 @@ function openMyApps(): void {
 
 function closeSurface(): void {
   if (!storeOpen) {
-    terminal.focus();
+    paneRuntimes.get(frameSnapshot.focusedPaneId ?? "")?.terminal.focus();
     return;
   }
 
@@ -2385,49 +3108,15 @@ function closeSurface(): void {
   launchpadOpenButton.setAttribute("aria-expanded", "false");
   storeOpenButton.setAttribute("aria-expanded", "false");
   appsOpenButton.setAttribute("aria-expanded", "false");
-  sessionMeta.textContent = session?.shell ?? "starting terminal session…";
+  updateFocusedSession();
   renderTerminalStatus();
-  fitAddon.fit();
   sendResize();
-  terminal.focus();
+  paneRuntimes.get(frameSnapshot.focusedPaneId ?? "")?.terminal.focus();
 }
 
 function closeStore(): void {
   closeSurface();
 }
-
-terminal.onData((data) => {
-  if (!session) {
-    return;
-  }
-
-  void invoke("write_session", {
-    id: session.id,
-    data: new TextEncoder().encode(data),
-  }).catch((error: unknown) => showError(String(error)));
-});
-
-terminal.attachCustomKeyEventHandler((event) => {
-  if (event.type !== "keydown" || !event.ctrlKey || !event.shiftKey) {
-    return true;
-  }
-
-  if (event.key.toLowerCase() === "c" && terminal.hasSelection()) {
-    event.preventDefault();
-    void writeText(terminal.getSelection()).catch((error: unknown) => showError(String(error)));
-    return false;
-  }
-
-  if (event.key.toLowerCase() === "v") {
-    event.preventDefault();
-    void readText()
-      .then((text) => terminal.paste(text))
-      .catch((error: unknown) => showError(String(error)));
-    return false;
-  }
-
-  return true;
-});
 
 launchpadOpenButton.addEventListener("click", openLaunchpad);
 storeOpenButton.addEventListener("click", openStore);
@@ -2435,6 +3124,38 @@ appsOpenButton.addEventListener("click", openMyApps);
 launchpadCloseButton.addEventListener("click", closeSurface);
 storeCloseButton.addEventListener("click", closeSurface);
 appsCloseButton.addEventListener("click", closeSurface);
+commandCloseButton.addEventListener("click", closeCommandOverlay);
+commandSearch.addEventListener("input", renderCommandList);
+commandSearch.addEventListener("keydown", (event) => {
+  if (event.key === "ArrowDown") {
+    event.preventDefault();
+    moveCommandSelection(1);
+  } else if (event.key === "ArrowUp") {
+    event.preventDefault();
+    moveCommandSelection(-1);
+  } else if (event.key === "Enter") {
+    event.preventDefault();
+    void executeSelectedCommand();
+  } else if (event.key === "Escape") {
+    event.preventDefault();
+    closeCommandOverlay();
+  }
+});
+commandList.addEventListener("keydown", (event) => {
+  if (event.key === "ArrowDown") {
+    event.preventDefault();
+    moveCommandSelection(1);
+  } else if (event.key === "ArrowUp") {
+    event.preventDefault();
+    moveCommandSelection(-1);
+  } else if (event.key === "Enter") {
+    event.preventDefault();
+    void executeSelectedCommand();
+  } else if (event.key === "Escape") {
+    event.preventDefault();
+    closeCommandOverlay();
+  }
+});
 launchpadSearch.addEventListener("input", scheduleLaunchpadRefresh);
 storeSearch.addEventListener("input", scheduleStoreRefresh);
 storeCategory.addEventListener("change", () => void refreshStore());
@@ -2535,36 +3256,18 @@ appsList.addEventListener("keydown", (event) => {
 });
 
 window.addEventListener("keydown", (event) => {
-  const launchpadShortcut = event.ctrlKey && event.shiftKey && event.code === "KeyL";
-  const storeShortcut = event.ctrlKey && event.shiftKey && event.code === "Space";
-  const appsShortcut = event.ctrlKey && event.shiftKey && event.code === "KeyA";
-  if (launchpadShortcut) {
-    event.preventDefault();
-    if (storeOpen && activeSurface === "launchpad") {
-      closeSurface();
-    } else {
-      openLaunchpad();
+  if (commandOverlayOpen) {
+    if (event.key === "Escape" && event.target !== commandSearch) {
+      event.preventDefault();
+      closeCommandOverlay();
     }
     return;
   }
 
-  if (storeShortcut) {
+  if (eventMatchesLeader(event)) {
     event.preventDefault();
-    if (storeOpen && activeSurface === "store") {
-      closeSurface();
-    } else {
-      openStore();
-    }
-    return;
-  }
-
-  if (appsShortcut) {
-    event.preventDefault();
-    if (storeOpen && activeSurface === "apps") {
-      closeSurface();
-    } else {
-      openMyApps();
-    }
+    event.stopPropagation();
+    openCommandOverlay();
     return;
   }
 
@@ -2572,62 +3275,64 @@ window.addEventListener("keydown", (event) => {
     event.preventDefault();
     closeSurface();
   }
-});
+}, true);
 
 window.addEventListener("resize", scheduleResize);
 window.addEventListener("beforeunload", () => {
-  if (session) {
-    void invoke("close_session", { id: session.id });
+  const sessionIds = new Set(frameSnapshot.tabs.flatMap((tab) => tab.panes.map((pane) => pane.session.id)));
+  for (const id of sessionIds) {
+    void invoke("close_session", { id });
   }
 });
 
 void listen<SessionExited>("session-exited", (event) => {
-  if (event.payload.id !== session?.id) {
+  if (!paneForSession(event.payload.id)) {
     return;
   }
-  setTerminalStatus("stopped", "stopped");
-  terminal.write("\r\n\u001b[90m[session stopped]\u001b[0m\r\n");
+  writeToPane(event.payload.id, new TextEncoder().encode("\r\n\u001b[90m[session stopped]\u001b[0m\r\n"));
+  if (event.payload.id === session?.id) {
+    setTerminalStatus("stopped", "stopped");
+  }
 });
 
 async function startSession(): Promise<void> {
   const output = new Channel<Uint8Array>();
   const pendingOutput: Uint8Array[] = [];
   let outputSessionId: string | undefined;
+  let sessionAccepted = false;
   output.onmessage = (chunk) => {
-    if (outputSessionId && session?.id === outputSessionId) {
-      terminal.write(chunk);
-    } else if (!outputSessionId) {
+    if (sessionAccepted && outputSessionId) {
+      writeToPane(outputSessionId, chunk);
+    } else {
       pendingOutput.push(chunk);
     }
   };
 
   try {
-    const nextSession = await invoke<SessionInfo>("create_session", {
-      request: {
-        cols: fitAddon.proposeDimensions()?.cols ?? 120,
-        rows: fitAddon.proposeDimensions()?.rows ?? 40,
-        cwd: null,
-        shell: null,
-      },
+    const nextSnapshot = await invoke<FrameSnapshot>("frame_create_tab", {
+      request: frameRequest(),
       onOutput: output,
     });
-    session = nextSession;
-    outputSessionId = nextSession.id;
+    outputSessionId = nextSnapshot.focusedPaneId
+      ? nextSnapshot.tabs
+          .flatMap((tab) => tab.panes)
+          .find((pane) => pane.id === nextSnapshot.focusedPaneId)?.session.id
+      : undefined;
+    renderFrame(nextSnapshot);
+    sessionAccepted = true;
     for (const chunk of pendingOutput) {
-      terminal.write(chunk);
+      if (outputSessionId) {
+        writeToPane(outputSessionId, chunk);
+      }
     }
-    sessionMeta.textContent = session.shell;
-    cwdLabel.textContent = session.cwd;
     setTerminalStatus("ready", "ready");
     sendResize();
-    if (!storeOpen) {
-      terminal.focus();
-    }
   } catch (error) {
     showError(`Could not start the terminal session: ${String(error)}`);
   }
 }
 
+leaderHint.textContent = `Leader ${leaderLabel()}`;
 void startSession();
 void refreshLaunchpad();
 void refreshMyApps();
