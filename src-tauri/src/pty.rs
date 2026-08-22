@@ -33,7 +33,7 @@ pub struct LaunchProcessRequest {
     pub cwd: String,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SessionInfo {
     pub id: String,
@@ -197,6 +197,14 @@ impl PtySession {
             .map_err(|_| io::Error::other("session child lock poisoned"))?;
         child.wait().map(|_| ())
     }
+
+    fn is_running(&self) -> io::Result<bool> {
+        let mut child = self
+            .child
+            .lock()
+            .map_err(|_| io::Error::other("session child lock poisoned"))?;
+        Ok(child.try_wait()?.is_none())
+    }
 }
 
 impl Drop for PtySession {
@@ -230,7 +238,7 @@ pub struct SessionManager {
 }
 
 impl SessionManager {
-    fn create(
+    pub(crate) fn create(
         &self,
         request: CreateSessionRequest,
         app: AppHandle,
@@ -304,6 +312,12 @@ impl SessionManager {
             .get(id)
             .cloned()
             .ok_or_else(|| format!("unknown session: {id}"))
+    }
+
+    pub(crate) fn is_running(&self, id: &str) -> bool {
+        self.get(id)
+            .and_then(|session| session.pty.is_running().map_err(|error| error.to_string()))
+            .unwrap_or(false)
     }
 
     pub(crate) fn close(&self, id: &str) -> Result<(), String> {

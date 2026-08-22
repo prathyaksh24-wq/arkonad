@@ -1,9 +1,11 @@
 mod catalog;
+mod frame;
 mod installer;
 mod launcher;
 mod pty;
 
 use catalog::CatalogRuntime;
+use frame::FrameRuntime;
 use installer::InstallRuntime;
 use launcher::LaunchRuntime;
 use pty::SessionManager;
@@ -14,6 +16,7 @@ fn main() {
         .manage(CatalogRuntime::builtins())
         .manage(InstallRuntime::default())
         .manage(LaunchRuntime::default())
+        .manage(FrameRuntime::default())
         .manage(SessionManager::default())
         .invoke_handler(tauri::generate_handler![
             catalog::catalog_detect,
@@ -32,6 +35,16 @@ fn main() {
             launcher::custom_app_save,
             launcher::custom_app_set_enabled,
             launcher::custom_app_remove,
+            frame::frame_snapshot,
+            frame::frame_create_tab,
+            frame::frame_create_split,
+            frame::frame_attach_session,
+            frame::frame_activate_tab,
+            frame::frame_focus_pane,
+            frame::frame_focus_move,
+            frame::frame_resize_split,
+            frame::frame_close_focused,
+            frame::frame_close_tab,
             pty::create_session,
             pty::write_session,
             pty::resize_session,
