@@ -130,6 +130,60 @@ type CatalogEntry = {
   detection: CatalogDetection | null;
 };
 
+type LaunchpadEntry = {
+  id: string;
+  source: "catalog" | "custom";
+  name: string;
+  summary: string;
+  category: CatalogCategory | null;
+  publisher: string | null;
+  launchable: boolean;
+  executablePath: string | null;
+  profileId: string | null;
+  supportsWorkingDirectory: boolean;
+  pinned: boolean;
+  newlyInstalled: boolean;
+  lastLaunchedAt: string | null;
+};
+
+type LaunchLocation =
+  | { kind: "currentDirectory" }
+  | { kind: "directory"; path: string }
+  | { kind: "newWorkspace"; name: string };
+
+type CustomAppProfile = {
+  id: string;
+  name: string;
+  executable: string;
+  arguments: string[];
+  shell: string | null;
+  workingDirectory: string | null;
+  supportsWorkingDirectory: boolean;
+  enabled: boolean;
+  createdAt: string;
+  updatedAt: string;
+};
+
+type CustomAppDraft = {
+  id?: string | null;
+  name: string;
+  executable: string;
+  arguments: string[];
+  shell: string | null;
+  workingDirectory: string | null;
+  supportsWorkingDirectory: boolean;
+  enabled: boolean;
+};
+
+type CustomAppValidation = {
+  valid: boolean;
+  errors: string[];
+  warnings: string[];
+  executablePath: string | null;
+  shellPath: string | null;
+  workingDirectory: string | null;
+};
+
 type InstallStep = {
   id: string;
   label: string;
@@ -219,6 +273,8 @@ type MyAppEntry = {
   updateState: "available" | "current" | "unknown" | "notManaged";
   launchable: boolean;
   executablePath: string | null;
+  launchProfileId: string | null;
+  supportsWorkingDirectory: boolean;
   source: string;
   lastCheckedAt: string;
   methodId: string | null;
@@ -281,6 +337,9 @@ app.innerHTML = `
     <header class="topbar">
       <div class="brand"><span class="ember">◆</span><span>arkonad</span></div>
       <div class="session-meta" data-session-meta>starting terminal session…</div>
+      <button class="topbar-action" type="button" data-launchpad-open aria-expanded="false">
+        Launchpad <span class="key-hint">Ctrl+Shift+L</span>
+      </button>
       <button class="topbar-action" type="button" data-store-open aria-expanded="false">
         Store <span class="key-hint">Ctrl+Shift+Space</span>
       </button>
@@ -294,6 +353,37 @@ app.innerHTML = `
       <section class="terminal-shell" data-terminal-shell>
         <div class="terminal" data-terminal></div>
         <div class="error-panel" data-error hidden></div>
+      </section>
+      <section class="store-shell" data-launchpad-view hidden aria-label="Launchpad">
+        <div class="store-toolbar">
+          <div class="store-heading">
+            <span class="store-eyebrow">LAUNCHPAD</span>
+            <span class="store-title">Open a Launchable Tool in the Arkonad PTY</span>
+          </div>
+          <label class="store-control">
+            <span>Search</span>
+            <input data-launchpad-search type="search" placeholder="name, category, publisher" autocomplete="off" />
+          </label>
+          <button class="store-close" type="button" data-launchpad-close>Esc · terminal</button>
+        </div>
+        <div class="store-notice" data-launchpad-notice>Only tools ready to launch appear here.</div>
+        <div class="store-content">
+          <section class="store-list-panel" aria-label="Launchable tools">
+            <div class="store-list-header">
+              <span>Launchable tools</span>
+              <span data-launchpad-count>loading…</span>
+            </div>
+            <div class="store-list" data-launchpad-list role="listbox" aria-label="Launchpad tools"></div>
+            <div class="store-error" data-launchpad-error hidden></div>
+          </section>
+          <article class="store-detail" data-launchpad-detail aria-live="polite"></article>
+        </div>
+        <div class="store-footer">
+          <span>↑↓ move</span>
+          <span>Enter launch details</span>
+          <span>Ctrl+Shift+L close</span>
+          <span>Esc terminal</span>
+        </div>
       </section>
       <section class="store-shell" data-store-view hidden aria-label="Terminal App Store">
         <div class="store-toolbar">
@@ -369,6 +459,7 @@ app.innerHTML = `
     </main>
     <footer class="bottombar">
       <span>Leader+Space controls</span>
+      <span>Ctrl+Shift+L Launchpad</span>
       <span>Ctrl+Shift+C copy</span>
       <span>Ctrl+Shift+V paste</span>
       <span>Ctrl+Shift+Space Store</span>
@@ -384,13 +475,22 @@ const sessionMeta = app.querySelector<HTMLDivElement>("[data-session-meta]")!;
 const status = app.querySelector<HTMLDivElement>("[data-status]")!;
 const cwdLabel = app.querySelector<HTMLSpanElement>("[data-cwd]")!;
 const errorPanel = app.querySelector<HTMLDivElement>("[data-error]")!;
+const launchpadOpenButton = app.querySelector<HTMLButtonElement>("[data-launchpad-open]")!;
 const storeOpenButton = app.querySelector<HTMLButtonElement>("[data-store-open]")!;
 const appsOpenButton = app.querySelector<HTMLButtonElement>("[data-apps-open]")!;
 const appsUpdateBadge = app.querySelector<HTMLSpanElement>("[data-apps-update-badge]")!;
+const launchpadCloseButton = app.querySelector<HTMLButtonElement>("[data-launchpad-close]")!;
 const storeCloseButton = app.querySelector<HTMLButtonElement>("[data-store-close]")!;
 const appsCloseButton = app.querySelector<HTMLButtonElement>("[data-apps-close]")!;
+const launchpadView = app.querySelector<HTMLElement>("[data-launchpad-view]")!;
 const storeView = app.querySelector<HTMLElement>("[data-store-view]")!;
 const appsView = app.querySelector<HTMLElement>("[data-apps-view]")!;
+const launchpadSearch = app.querySelector<HTMLInputElement>("[data-launchpad-search]")!;
+const launchpadNotice = app.querySelector<HTMLDivElement>("[data-launchpad-notice]")!;
+const launchpadCount = app.querySelector<HTMLSpanElement>("[data-launchpad-count]")!;
+const launchpadList = app.querySelector<HTMLDivElement>("[data-launchpad-list]")!;
+const launchpadError = app.querySelector<HTMLDivElement>("[data-launchpad-error]")!;
+const launchpadDetail = app.querySelector<HTMLElement>("[data-launchpad-detail]")!;
 const storeSearch = app.querySelector<HTMLInputElement>("[data-store-search]")!;
 const storeCategory = app.querySelector<HTMLSelectElement>("[data-store-category]")!;
 const storeNotice = app.querySelector<HTMLDivElement>("[data-store-notice]")!;
@@ -412,13 +512,22 @@ if (
   !status ||
   !cwdLabel ||
   !errorPanel ||
+  !launchpadOpenButton ||
   !storeOpenButton ||
   !appsOpenButton ||
   !appsUpdateBadge ||
+  !launchpadCloseButton ||
   !storeCloseButton ||
   !appsCloseButton ||
+  !launchpadView ||
   !storeView ||
   !appsView ||
+  !launchpadSearch ||
+  !launchpadNotice ||
+  !launchpadCount ||
+  !launchpadList ||
+  !launchpadError ||
+  !launchpadDetail ||
   !storeSearch ||
   !storeCategory ||
   !storeNotice ||
@@ -482,7 +591,11 @@ let resizeTimer: number | undefined;
 let terminalStatusText = "connecting";
 let terminalStatusState = "";
 let storeOpen = false;
-let activeSurface: "store" | "apps" = "store";
+let activeSurface: "launchpad" | "store" | "apps" = "launchpad";
+let launchpadEntries: LaunchpadEntry[] = [];
+let selectedLaunchpadId: string | undefined;
+let launchpadRequestId = 0;
+let launchpadRefreshTimer: number | undefined;
 let storeEntries: CatalogEntry[] = [];
 let selectedStoreId: string | undefined;
 let storeRequestId = 0;
@@ -492,6 +605,9 @@ let myAppsEntries: MyAppEntry[] = [];
 let selectedMyAppId: string | undefined;
 let myAppsRequestId = 0;
 let myAppsRefreshTimer: number | undefined;
+let customAppEntries: CustomAppProfile[] = [];
+let editingCustomAppId: string | undefined;
+let launchBusy = false;
 
 function renderTerminalStatus(): void {
   status.textContent = terminalStatusText;
@@ -656,6 +772,180 @@ function createInstallButton(label: string, onClick: () => void): HTMLButtonElem
   button.disabled = installBusy;
   button.addEventListener("click", onClick);
   return button;
+}
+
+type LaunchTarget = {
+  id: string;
+  name: string;
+  profileId: string | null;
+  executablePath: string | null;
+  supportsWorkingDirectory: boolean;
+  pinned?: boolean;
+};
+
+function createLaunchButton(label: string, onClick: () => void): HTMLButtonElement {
+  const button = makeElement("button", "detail-action", label) as HTMLButtonElement;
+  button.type = "button";
+  button.disabled = launchBusy;
+  button.addEventListener("click", onClick);
+  return button;
+}
+
+function launchLocationFromControls(
+  select: HTMLSelectElement,
+  directoryInput: HTMLInputElement,
+  workspaceInput: HTMLInputElement,
+): LaunchLocation {
+  switch (select.value) {
+    case "directory":
+      return { kind: "directory", path: directoryInput.value.trim() };
+    case "newWorkspace":
+      return { kind: "newWorkspace", name: workspaceInput.value.trim() };
+    default:
+      return { kind: "currentDirectory" };
+  }
+}
+
+async function launchTarget(target: LaunchTarget, location: LaunchLocation): Promise<void> {
+  if (launchBusy) {
+    return;
+  }
+
+  launchBusy = true;
+  const previousSessionId = session?.id;
+  const output = new Channel<Uint8Array>();
+  const pendingOutput: Uint8Array[] = [];
+  let sessionAccepted = false;
+  output.onmessage = (chunk) => {
+    if (sessionAccepted) {
+      terminal.write(chunk);
+    } else {
+      pendingOutput.push(chunk);
+    }
+  };
+
+  try {
+    const nextSession = await invoke<SessionInfo>("launch_app", {
+      request: {
+        appId: target.id,
+        profileId: target.profileId,
+        location,
+        currentDirectory: session?.cwd ?? null,
+      },
+      onOutput: output,
+    });
+    session = nextSession;
+    terminal.clear();
+    sessionAccepted = true;
+    for (const chunk of pendingOutput) {
+      terminal.write(chunk);
+    }
+    if (previousSessionId && previousSessionId !== nextSession.id) {
+      await invoke("close_session", { id: previousSessionId }).catch(() => undefined);
+    }
+    cwdLabel.textContent = nextSession.cwd;
+    launchBusy = false;
+    closeSurface();
+    sessionMeta.textContent = `${target.name} · ${nextSession.shell}`;
+    setTerminalStatus("ready", "ready");
+    sendResize();
+    terminal.focus();
+    void refreshLaunchpad();
+    void refreshMyApps();
+  } catch (error) {
+    launchBusy = false;
+    const message = `Could not launch ${target.name}: ${String(error)}`;
+    if (activeSurface === "launchpad") {
+      launchpadNotice.textContent = message;
+    } else if (activeSurface === "apps") {
+      appsNotice.textContent = message;
+    }
+  }
+}
+
+function appendLaunchControls(parent: HTMLElement, target: LaunchTarget): void {
+  const section = appendDetailSection(parent, "Launch");
+  appendDetailLine(section, "Executable", target.executablePath ?? "resolved at launch");
+  appendDetailLine(
+    section,
+    "Input",
+    "After launch, the Native TUI owns keyboard input and authentication.",
+  );
+
+  const locationRow = makeElement("div", "launch-location-row");
+  let locationSelect: HTMLSelectElement | undefined;
+  let directoryInput: HTMLInputElement | undefined;
+  let workspaceInput: HTMLInputElement | undefined;
+  if (target.supportsWorkingDirectory) {
+    const locationLabel = makeElement("label", "launch-control");
+    locationLabel.append(makeElement("span", undefined, "Launch location"));
+    locationSelect = makeElement("select", undefined) as HTMLSelectElement;
+    locationSelect.innerHTML = `
+      <option value="currentDirectory">Current directory</option>
+      <option value="directory">Another directory</option>
+      <option value="newWorkspace">New Workspace</option>
+    `;
+    locationLabel.append(locationSelect);
+    locationRow.append(locationLabel);
+
+    directoryInput = makeElement("input") as HTMLInputElement;
+    directoryInput.type = "text";
+    directoryInput.placeholder = "D:\\path\\to\\directory";
+    directoryInput.className = "launch-location-input";
+    directoryInput.hidden = true;
+    directoryInput.setAttribute("aria-label", "Another directory");
+    locationRow.append(directoryInput);
+
+    workspaceInput = makeElement("input") as HTMLInputElement;
+    workspaceInput.type = "text";
+    workspaceInput.placeholder = "workspace name";
+    workspaceInput.className = "launch-location-input";
+    workspaceInput.hidden = true;
+    workspaceInput.setAttribute("aria-label", "New Workspace name");
+    locationRow.append(workspaceInput);
+
+    locationSelect.addEventListener("change", () => {
+      directoryInput!.hidden = locationSelect!.value !== "directory";
+      workspaceInput!.hidden = locationSelect!.value !== "newWorkspace";
+      if (locationSelect!.value === "directory") {
+        directoryInput!.focus();
+      } else if (locationSelect!.value === "newWorkspace") {
+        workspaceInput!.focus();
+      }
+    });
+  } else {
+    locationRow.append(
+      makeElement(
+        "p",
+        "detail-note",
+        "This launch profile supplies its own working directory; location choices are not offered.",
+      ),
+    );
+  }
+  section.append(locationRow);
+
+  const buttonRow = makeElement("div", "install-button-row");
+  buttonRow.append(
+    createLaunchButton(`Launch ${target.name}`, () => {
+      const location = locationSelect && directoryInput && workspaceInput
+        ? launchLocationFromControls(locationSelect, directoryInput, workspaceInput)
+        : { kind: "currentDirectory" as const };
+      void launchTarget(target, location);
+    }),
+  );
+  const pinButton = createLaunchButton(target.pinned ? "Unpin" : "Pin first", () => {
+    const current = launchpadEntries.find((entry) => entry.id === target.id);
+    void invoke("launchpad_set_pinned", {
+      id: target.id,
+      pinned: !(current?.pinned ?? target.pinned ?? false),
+    }).then(() => {
+      void refreshLaunchpad();
+    }).catch((error: unknown) => {
+      launchpadNotice.textContent = `Could not update the pin: ${String(error)}`;
+    });
+  });
+  buttonRow.append(pinButton);
+  section.append(buttonRow);
 }
 
 function appendInstallStep(
@@ -1175,98 +1465,483 @@ async function loadManagementPlan(
   }
 }
 
-function renderMyAppsDetail(entry: MyAppEntry | undefined): void {
-  appsDetail.replaceChildren();
+function launchpadSearchText(entry: LaunchpadEntry): string {
+  return `${entry.name} ${entry.summary} ${entry.category ?? ""} ${entry.publisher ?? ""}`
+    .toLowerCase();
+}
+
+function renderLaunchpadDetail(entry: LaunchpadEntry | undefined): void {
+  launchpadDetail.replaceChildren();
   if (!entry) {
-    appsDetail.append(makeElement("div", "store-empty-detail", "No installed or detected tools match this search."));
+    launchpadDetail.append(
+      makeElement("div", "store-empty-detail", "Select a Launchable Tool to see its launch profile."),
+    );
     return;
   }
 
   const header = makeElement("header", "detail-header");
-  header.append(makeElement("span", "detail-category", entry.category));
-  header.append(makeElement("h2", "detail-title", entry.toolName));
+  header.append(makeElement("span", "detail-category", entry.category ?? "custom tool"));
+  header.append(makeElement("h2", "detail-title", entry.name));
   header.append(makeElement("p", "detail-summary", entry.summary));
-  header.append(makeElement("p", "detail-meta", `${entry.publisher} · ${entry.ownership}`));
-  appsDetail.append(header);
+  header.append(
+    makeElement(
+      "p",
+      "detail-meta",
+      [entry.publisher, entry.pinned ? "pinned" : "", entry.newlyInstalled ? "new" : ""]
+        .filter(Boolean)
+        .join(" · "),
+    ),
+  );
+  launchpadDetail.append(header);
 
-  const stateSection = appendDetailSection(appsDetail, "State");
-  appendDetailLine(stateSection, "Ownership", entry.ownership);
-  appendDetailLine(stateSection, "Installed version", entry.installedVersion ?? "not reported");
-  appendDetailLine(stateSection, "Update", updateStateLabel(entry.updateState));
+  const stateSection = appendDetailSection(launchpadDetail, "Launchpad priority");
   appendDetailLine(stateSection, "Launchable", entry.launchable ? "yes" : "no");
-  appendDetailLine(stateSection, "Executable", entry.executablePath ?? "not resolved");
-  appendDetailLine(stateSection, "Last check", formatTimestamp(entry.lastCheckedAt));
-  appendDetailLine(stateSection, "Source", entry.source);
+  appendDetailLine(stateSection, "Pin", entry.pinned ? "first" : "not pinned");
+  appendDetailLine(stateSection, "New install", entry.newlyInstalled ? "temporary priority" : "not new");
+  appendDetailLine(
+    stateSection,
+    "Recent use",
+    entry.lastLaunchedAt ? formatTimestamp(entry.lastLaunchedAt) : "not launched yet",
+  );
 
-  if (entry.receipt) {
-    const receiptSection = appendDetailSection(appsDetail, "Arkonad receipt");
-    appendDetailLine(receiptSection, "Method", entry.receipt.method);
-    appendDetailLine(receiptSection, "Installed at", formatTimestamp(entry.receipt.installedAt));
-    appendDetailLine(receiptSection, "Verification", entry.receipt.verification);
+  appendLaunchControls(launchpadDetail, {
+    id: entry.id,
+    name: entry.name,
+    profileId: entry.profileId,
+    executablePath: entry.executablePath,
+    supportsWorkingDirectory: entry.supportsWorkingDirectory,
+    pinned: entry.pinned,
+  });
+}
+
+function renderLaunchpadList(): void {
+  const query = launchpadSearch.value.trim().toLowerCase();
+  const visibleEntries = launchpadEntries.filter((entry) => !query || launchpadSearchText(entry).includes(query));
+  launchpadList.replaceChildren();
+  launchpadCount.textContent = `${visibleEntries.length} shown`;
+  if (visibleEntries.length === 0) {
+    launchpadList.append(
+      makeElement("div", "store-empty-list", "No Launchable Tools match this search. Install or enable one from My Apps."),
+    );
+    renderLaunchpadDetail(undefined);
+    return;
+  }
+  if (!visibleEntries.some((entry) => entry.id === selectedLaunchpadId)) {
+    selectedLaunchpadId = visibleEntries[0].id;
   }
 
-  const actionSection = appendDetailSection(appsDetail, "Manage");
-  const reviewHost = makeElement("div", "install-review-host");
-  if (entry.ownership !== "detected") {
-    const buttonRow = makeElement("div", "install-button-row");
-    for (const [operation, label] of [
-      ["update", "Review update"],
-      ["repair", "Review repair"],
-      ["integrationReset", "Review integration reset"],
-      ["uninstall", "Review uninstall"] ,
-    ] as const) {
-      buttonRow.append(
-        createInstallButton(label, () => void loadManagementPlan(entry, reviewHost, operation)),
-      );
+  for (const entry of visibleEntries) {
+    const selected = entry.id === selectedLaunchpadId;
+    const row = makeElement("button", "store-row") as HTMLButtonElement;
+    row.type = "button";
+    row.dataset.launchpadId = entry.id;
+    row.setAttribute("role", "option");
+    row.setAttribute("aria-selected", String(selected));
+    if (selected) {
+      row.classList.add("is-selected");
     }
-    actionSection.append(buttonRow);
-    if (entry.ownership === "managed") {
-      const cleanupSection = appendDetailSection(actionSection, "Separate data cleanup");
-      cleanupSection.append(
-        makeElement(
-          "p",
-          "detail-note",
-          "Uninstall preserves tool data. Cleanup is a separate reviewed action with exact targets only.",
-        ),
-      );
-      cleanupSection.append(
-        createInstallButton(
-          "Review data cleanup",
-          () => void loadManagementPlan(entry, reviewHost, "dataCleanup"),
-        ),
-      );
+    const rowTop = makeElement("span", "store-row-top");
+    rowTop.append(makeElement("strong", undefined, entry.name));
+    rowTop.append(
+      makeElement(
+        "span",
+        "store-row-category",
+        entry.pinned ? "pinned" : entry.newlyInstalled ? "new" : entry.source,
+      ),
+    );
+    row.append(rowTop);
+    row.append(makeElement("span", "store-row-summary", entry.summary));
+    const state = entry.lastLaunchedAt ? "recent" : "ready";
+    row.append(makeElement("span", "store-row-state status-active", state));
+    row.addEventListener("click", () => selectLaunchpadEntry(entry.id));
+    launchpadList.append(row);
+  }
+  renderLaunchpadDetail(visibleEntries.find((entry) => entry.id === selectedLaunchpadId));
+}
+
+function selectLaunchpadEntry(id: string, focusRow = false): void {
+  if (!launchpadEntries.some((entry) => entry.id === id)) {
+    return;
+  }
+  selectedLaunchpadId = id;
+  renderLaunchpadList();
+  if (focusRow) {
+    window.requestAnimationFrame(() => {
+      const row = Array.from(
+        launchpadList.querySelectorAll<HTMLButtonElement>("[data-launchpad-id]"),
+      ).find((candidate) => candidate.dataset.launchpadId === id);
+      row?.focus();
+    });
+  }
+}
+
+function moveLaunchpadSelection(offset: number): void {
+  const query = launchpadSearch.value.trim().toLowerCase();
+  const visibleEntries = launchpadEntries.filter((entry) => !query || launchpadSearchText(entry).includes(query));
+  if (visibleEntries.length === 0) {
+    return;
+  }
+  const currentIndex = visibleEntries.findIndex((entry) => entry.id === selectedLaunchpadId);
+  const nextIndex = (Math.max(currentIndex, 0) + offset + visibleEntries.length) % visibleEntries.length;
+  selectLaunchpadEntry(visibleEntries[nextIndex].id, true);
+}
+
+async function refreshLaunchpad(): Promise<void> {
+  const requestId = ++launchpadRequestId;
+  launchpadError.hidden = true;
+  launchpadNotice.textContent = "Checking launch profiles and executable readiness…";
+  launchpadCount.textContent = "loading…";
+  try {
+    launchpadEntries = await invoke<LaunchpadEntry[]>("launchpad_list");
+    if (requestId !== launchpadRequestId) {
+      return;
+    }
+    launchpadNotice.textContent =
+      "Only Ready or Detected Installations appear. Pins, new installs, then recent tools lead the list.";
+    renderLaunchpadList();
+  } catch (error) {
+    if (requestId !== launchpadRequestId) {
+      return;
+    }
+    launchpadEntries = [];
+    renderLaunchpadList();
+    launchpadError.hidden = false;
+    launchpadError.textContent = `Could not read Launchpad: ${String(error)}`;
+  }
+}
+
+function scheduleLaunchpadRefresh(): void {
+  if (launchpadRefreshTimer !== undefined) {
+    window.clearTimeout(launchpadRefreshTimer);
+  }
+  launchpadRefreshTimer = window.setTimeout(() => void refreshLaunchpad(), 140);
+}
+
+function openLaunchpad(): void {
+  if (storeOpen && activeSurface === "launchpad") {
+    launchpadSearch.focus();
+    return;
+  }
+  storeOpen = true;
+  activeSurface = "launchpad";
+  terminalShell.hidden = true;
+  launchpadView.hidden = false;
+  storeView.hidden = true;
+  appsView.hidden = true;
+  launchpadOpenButton.setAttribute("aria-expanded", "true");
+  storeOpenButton.setAttribute("aria-expanded", "false");
+  appsOpenButton.setAttribute("aria-expanded", "false");
+  sessionMeta.textContent = "launchpad";
+  status.textContent = "launchpad";
+  status.dataset.state = "ready";
+  void refreshLaunchpad();
+  window.requestAnimationFrame(() => launchpadSearch.focus());
+}
+
+function customDraftFromForm(form: HTMLFormElement, id: string | undefined): CustomAppDraft {
+  const name = form.querySelector<HTMLInputElement>("[data-custom-name]")!;
+  const executable = form.querySelector<HTMLInputElement>("[data-custom-executable]")!;
+  const argumentsInput = form.querySelector<HTMLTextAreaElement>("[data-custom-arguments]")!;
+  const shell = form.querySelector<HTMLInputElement>("[data-custom-shell]")!;
+  const workingDirectory = form.querySelector<HTMLInputElement>("[data-custom-working-directory]")!;
+  const supportsWorkingDirectory = form.querySelector<HTMLInputElement>("[data-custom-supports-cwd]")!;
+  const enabled = form.querySelector<HTMLInputElement>("[data-custom-enabled]")!;
+  return {
+    id: id ?? null,
+    name: name.value,
+    executable: executable.value,
+    arguments: argumentsInput.value
+      .split(/\r?\n/)
+      .map((argument) => argument.trim())
+      .filter(Boolean),
+    shell: shell.value.trim() || null,
+    workingDirectory: workingDirectory.value.trim() || null,
+    supportsWorkingDirectory: supportsWorkingDirectory.checked,
+    enabled: enabled.checked,
+  };
+}
+
+function renderCustomAppsManager(parent: HTMLElement): void {
+  const section = appendDetailSection(parent, "Custom Tool profiles");
+  section.append(
+    makeElement(
+      "p",
+      "detail-note",
+      "Custom Tools are stored locally as launch profiles. They do not edit the reviewed Store catalog, and authentication remains inside the tool.",
+    ),
+  );
+
+  const list = makeElement("div", "custom-app-list");
+  for (const profile of customAppEntries) {
+    const row = makeElement("div", "custom-app-row");
+    const rowHeader = makeElement("div", "custom-app-row-header");
+    rowHeader.append(makeElement("strong", undefined, profile.name));
+    rowHeader.append(makeElement("span", "store-row-category", profile.enabled ? "enabled" : "disabled"));
+    row.append(rowHeader);
+    row.append(makeElement("code", "detail-code", [profile.executable, ...profile.arguments].join(" ")));
+    const rowButtons = makeElement("div", "install-button-row");
+    rowButtons.append(
+      createInstallButton("Edit", () => {
+        editingCustomAppId = profile.id;
+        renderMyAppsDetail(myAppsEntries.find((entry) => entry.manifestId === selectedMyAppId));
+      }),
+    );
+    rowButtons.append(
+      createInstallButton(profile.enabled ? "Disable" : "Enable", () => {
+        void invoke("custom_app_set_enabled", { id: profile.id, enabled: !profile.enabled })
+          .then(() => refreshMyApps())
+          .catch((error: unknown) => {
+            appsNotice.textContent = `Could not change the Custom Tool state: ${String(error)}`;
+          });
+      }),
+    );
+    rowButtons.append(
+      createInstallButton("Remove", () => {
+        if (!window.confirm(`Remove the Custom Tool profile “${profile.name}”?`)) {
+          return;
+        }
+        void invoke("custom_app_remove", { id: profile.id })
+          .then(() => {
+            if (editingCustomAppId === profile.id) {
+              editingCustomAppId = undefined;
+            }
+            return refreshMyApps();
+          })
+          .catch((error: unknown) => {
+            appsNotice.textContent = `Could not remove the Custom Tool profile: ${String(error)}`;
+          });
+      }),
+    );
+    row.append(rowButtons);
+    list.append(row);
+  }
+  if (customAppEntries.length === 0) {
+    list.append(makeElement("p", "detail-empty", "No Custom Tool profiles yet."));
+  }
+  section.append(list);
+
+  const editing = customAppEntries.find((profile) => profile.id === editingCustomAppId);
+  const form = makeElement("form", "custom-app-form") as HTMLFormElement;
+  const formHeading = makeElement("div", "install-step-header");
+  formHeading.append(makeElement("strong", undefined, editing ? `Edit ${editing.name}` : "Add a Custom Tool"));
+  form.append(formHeading);
+
+  const addField = (labelText: string, input: HTMLInputElement | HTMLTextAreaElement): void => {
+    const label = makeElement("label", "custom-app-field");
+    label.append(makeElement("span", undefined, labelText));
+    label.append(input);
+    form.append(label);
+  };
+  const nameInput = makeElement("input") as HTMLInputElement;
+  nameInput.type = "text";
+  nameInput.dataset.customName = "true";
+  nameInput.value = editing?.name ?? "";
+  nameInput.placeholder = "Tool name";
+  addField("Name", nameInput);
+  const executableInput = makeElement("input") as HTMLInputElement;
+  executableInput.type = "text";
+  executableInput.dataset.customExecutable = "true";
+  executableInput.value = editing?.executable ?? "";
+  executableInput.placeholder = "executable or full path";
+  addField("Executable", executableInput);
+  const argumentsInput = makeElement("textarea") as HTMLTextAreaElement;
+  argumentsInput.dataset.customArguments = "true";
+  argumentsInput.rows = 3;
+  argumentsInput.placeholder = "one argument per line (optional)";
+  argumentsInput.value = editing?.arguments.join("\n") ?? "";
+  addField("Arguments", argumentsInput);
+  const shellInput = makeElement("input") as HTMLInputElement;
+  shellInput.type = "text";
+  shellInput.dataset.customShell = "true";
+  shellInput.value = editing?.shell ?? "";
+  shellInput.placeholder = "optional shell executable";
+  addField("Shell runtime", shellInput);
+  const workingDirectoryInput = makeElement("input") as HTMLInputElement;
+  workingDirectoryInput.type = "text";
+  workingDirectoryInput.dataset.customWorkingDirectory = "true";
+  workingDirectoryInput.value = editing?.workingDirectory ?? "";
+  workingDirectoryInput.placeholder = "optional default directory";
+  addField("Default directory", workingDirectoryInput);
+
+  const supportsLabel = makeElement("label", "custom-app-check");
+  const supportsInput = makeElement("input") as HTMLInputElement;
+  supportsInput.type = "checkbox";
+  supportsInput.dataset.customSupportsCwd = "true";
+  supportsInput.checked = editing?.supportsWorkingDirectory ?? true;
+  supportsLabel.append(supportsInput, makeElement("span", undefined, "Tool accepts a chosen working directory"));
+  form.append(supportsLabel);
+  const enabledLabel = makeElement("label", "custom-app-check");
+  const enabledInput = makeElement("input") as HTMLInputElement;
+  enabledInput.type = "checkbox";
+  enabledInput.dataset.customEnabled = "true";
+  enabledInput.checked = editing?.enabled ?? true;
+  enabledLabel.append(enabledInput, makeElement("span", undefined, "Enabled in Launchpad"));
+  form.append(enabledLabel);
+
+  const validationMessage = makeElement("p", "detail-empty", "Validate before saving; nothing runs during validation.");
+  form.append(validationMessage);
+  const formButtons = makeElement("div", "install-button-row");
+  const validate = createInstallButton("Validate profile", () => {
+    const draft = customDraftFromForm(form, editing?.id);
+    void invoke<CustomAppValidation>("custom_app_validate", { draft })
+      .then((result) => {
+        validationMessage.textContent = result.valid
+          ? `Valid. Executable: ${result.executablePath ?? "resolved"}. ${result.warnings.join(" ")}`
+          : result.errors.join(" ");
+        validationMessage.className = result.valid ? "detail-note" : "install-manual";
+      })
+      .catch((error: unknown) => {
+        validationMessage.textContent = `Validation failed: ${String(error)}`;
+        validationMessage.className = "install-manual";
+      });
+  });
+  formButtons.append(validate);
+  const save = createInstallButton(editing ? "Save changes" : "Add Custom Tool", () => {
+    const draft = customDraftFromForm(form, editing?.id);
+    void invoke<CustomAppValidation>("custom_app_validate", { draft })
+      .then((result) => {
+        if (!result.valid) {
+          validationMessage.textContent = result.errors.join(" ");
+          validationMessage.className = "install-manual";
+          return;
+        }
+        return invoke("custom_app_save", { draft }).then(() => {
+          editingCustomAppId = undefined;
+          return refreshMyApps();
+        });
+      })
+      .catch((error: unknown) => {
+        validationMessage.textContent = `Could not save the Custom Tool profile: ${String(error)}`;
+        validationMessage.className = "install-manual";
+      });
+  });
+  formButtons.append(save);
+  if (editing) {
+    formButtons.append(
+      createInstallButton("New profile", () => {
+        editingCustomAppId = undefined;
+        renderMyAppsDetail(myAppsEntries.find((entry) => entry.manifestId === selectedMyAppId));
+      }),
+    );
+  }
+  form.append(formButtons);
+  section.append(form);
+
+  if (editing?.enabled) {
+    appendLaunchControls(section, {
+      id: `custom:${editing.id}`,
+      name: editing.name,
+      profileId: editing.id,
+      executablePath: null,
+      supportsWorkingDirectory: editing.supportsWorkingDirectory,
+      pinned: launchpadEntries.find((candidate) => candidate.id === `custom:${editing.id}`)?.pinned,
+    });
+  }
+}
+
+function renderMyAppsDetail(entry: MyAppEntry | undefined): void {
+  appsDetail.replaceChildren();
+  if (!entry) {
+    appsDetail.append(makeElement("div", "store-empty-detail", "No installed or detected tools match this search."));
+  } else {
+    const header = makeElement("header", "detail-header");
+    header.append(makeElement("span", "detail-category", entry.category));
+    header.append(makeElement("h2", "detail-title", entry.toolName));
+    header.append(makeElement("p", "detail-summary", entry.summary));
+    header.append(makeElement("p", "detail-meta", `${entry.publisher} · ${entry.ownership}`));
+    appsDetail.append(header);
+
+    const stateSection = appendDetailSection(appsDetail, "State");
+    appendDetailLine(stateSection, "Ownership", entry.ownership);
+    appendDetailLine(stateSection, "Installed version", entry.installedVersion ?? "not reported");
+    appendDetailLine(stateSection, "Update", updateStateLabel(entry.updateState));
+    appendDetailLine(stateSection, "Launchable", entry.launchable ? "yes" : "no");
+    appendDetailLine(stateSection, "Executable", entry.executablePath ?? "not resolved");
+    appendDetailLine(stateSection, "Last check", formatTimestamp(entry.lastCheckedAt));
+    appendDetailLine(stateSection, "Source", entry.source);
+
+    if (entry.launchable) {
+      appendLaunchControls(appsDetail, {
+        id: entry.manifestId,
+        name: entry.toolName,
+        profileId: entry.launchProfileId,
+        executablePath: entry.executablePath,
+        supportsWorkingDirectory: entry.supportsWorkingDirectory,
+        pinned: launchpadEntries.find((candidate) => candidate.id === entry.manifestId)?.pinned,
+      });
+    }
+
+    if (entry.receipt) {
+      const receiptSection = appendDetailSection(appsDetail, "Arkonad receipt");
+      appendDetailLine(receiptSection, "Method", entry.receipt.method);
+      appendDetailLine(receiptSection, "Installed at", formatTimestamp(entry.receipt.installedAt));
+      appendDetailLine(receiptSection, "Verification", entry.receipt.verification);
+    }
+
+    const actionSection = appendDetailSection(appsDetail, "Manage");
+    const reviewHost = makeElement("div", "install-review-host");
+    if (entry.ownership !== "detected") {
+      const buttonRow = makeElement("div", "install-button-row");
+      for (const [operation, label] of [
+        ["update", "Review update"],
+        ["repair", "Review repair"],
+        ["integrationReset", "Review integration reset"],
+        ["uninstall", "Review uninstall"],
+      ] as const) {
+        buttonRow.append(
+          createInstallButton(label, () => void loadManagementPlan(entry, reviewHost, operation)),
+        );
+      }
+      actionSection.append(buttonRow);
+      if (entry.ownership === "managed") {
+        const cleanupSection = appendDetailSection(actionSection, "Separate data cleanup");
+        cleanupSection.append(
+          makeElement(
+            "p",
+            "detail-note",
+            "Uninstall preserves tool data. Cleanup is a separate reviewed action with exact targets only.",
+          ),
+        );
+        cleanupSection.append(
+          createInstallButton(
+            "Review data cleanup",
+            () => void loadManagementPlan(entry, reviewHost, "dataCleanup"),
+          ),
+        );
+      } else {
+        actionSection.append(
+          makeElement(
+            "p",
+            "detail-note",
+            "This external installation has an adopted package-management method. Arkonad still does not own or clean its tool data.",
+          ),
+        );
+      }
     } else {
       actionSection.append(
         makeElement(
           "p",
           "detail-note",
-          "This external installation has an adopted package-management method. Arkonad still does not own or clean its tool data.",
+          "Detected outside Arkonad. It remains usable, but Arkonad will not update, repair, uninstall, or clean its data unless you explicitly adopt a supported management method.",
+        ),
+      );
+      actionSection.append(
+        createInstallButton(
+          "Review supported adoption",
+          () => void loadManagementPlan(entry, reviewHost, "adopt"),
         ),
       );
     }
-  } else {
-    actionSection.append(
-      makeElement(
-        "p",
-        "detail-note",
-        "Detected outside Arkonad. It remains usable, but Arkonad will not update, repair, uninstall, or clean its data unless you explicitly adopt a supported management method.",
-      ),
-    );
-    actionSection.append(
-      createInstallButton(
-        "Review supported adoption",
-        () => void loadManagementPlan(entry, reviewHost, "adopt"),
-      ),
+    actionSection.append(reviewHost);
+
+    const dataSection = appendDetailSection(appsDetail, "Declared data locations");
+    appendDetailList(
+      dataSection,
+      entry.dataLocations.map((location) => `${location.kind}: ${location.path} · ${location.description}`),
+      "No data locations declared",
     );
   }
-  actionSection.append(reviewHost);
-
-  const dataSection = appendDetailSection(appsDetail, "Declared data locations");
-  appendDetailList(
-    dataSection,
-    entry.dataLocations.map((location) => `${location.kind}: ${location.path} · ${location.description}`),
-    "No data locations declared",
-  );
+  renderCustomAppsManager(appsDetail);
 }
 
 function renderMyAppsList(): void {
@@ -1351,11 +2026,15 @@ async function refreshMyApps(): Promise<void> {
   appsNotice.textContent = "Checking PATH and Arkonad receipts read-only…";
   appsCount.textContent = "loading…";
   try {
-    const snapshot = await invoke<MyAppsSnapshot>("my_apps_list");
+    const [snapshot, customApps] = await Promise.all([
+      invoke<MyAppsSnapshot>("my_apps_list"),
+      invoke<CustomAppProfile[]>("custom_app_list"),
+    ]);
     if (requestId !== myAppsRequestId) {
       return;
     }
     myAppsEntries = snapshot.entries;
+    customAppEntries = customApps;
     const updateLabel =
       snapshot.updatesAvailable === 1
         ? "1 reviewed update available"
@@ -1376,6 +2055,7 @@ async function refreshMyApps(): Promise<void> {
       return;
     }
     myAppsEntries = [];
+    customAppEntries = [];
     renderMyAppsList();
     appsError.hidden = false;
     appsError.textContent = `Could not read My Apps: ${String(error)}`;
@@ -1656,8 +2336,10 @@ function openStore(): void {
   storeOpen = true;
   activeSurface = "store";
   terminalShell.hidden = true;
+  launchpadView.hidden = true;
   appsView.hidden = true;
   storeView.hidden = false;
+  launchpadOpenButton.setAttribute("aria-expanded", "false");
   storeOpenButton.setAttribute("aria-expanded", "true");
   appsOpenButton.setAttribute("aria-expanded", "false");
   sessionMeta.textContent = "store browser";
@@ -1676,8 +2358,10 @@ function openMyApps(): void {
   storeOpen = true;
   activeSurface = "apps";
   terminalShell.hidden = true;
+  launchpadView.hidden = true;
   storeView.hidden = true;
   appsView.hidden = false;
+  launchpadOpenButton.setAttribute("aria-expanded", "false");
   storeOpenButton.setAttribute("aria-expanded", "false");
   appsOpenButton.setAttribute("aria-expanded", "true");
   sessionMeta.textContent = "my apps";
@@ -1694,9 +2378,11 @@ function closeSurface(): void {
   }
 
   storeOpen = false;
+  launchpadView.hidden = true;
   storeView.hidden = true;
   appsView.hidden = true;
   terminalShell.hidden = false;
+  launchpadOpenButton.setAttribute("aria-expanded", "false");
   storeOpenButton.setAttribute("aria-expanded", "false");
   appsOpenButton.setAttribute("aria-expanded", "false");
   sessionMeta.textContent = session?.shell ?? "starting terminal session…";
@@ -1743,10 +2429,13 @@ terminal.attachCustomKeyEventHandler((event) => {
   return true;
 });
 
+launchpadOpenButton.addEventListener("click", openLaunchpad);
 storeOpenButton.addEventListener("click", openStore);
 appsOpenButton.addEventListener("click", openMyApps);
+launchpadCloseButton.addEventListener("click", closeSurface);
 storeCloseButton.addEventListener("click", closeSurface);
 appsCloseButton.addEventListener("click", closeSurface);
+launchpadSearch.addEventListener("input", scheduleLaunchpadRefresh);
 storeSearch.addEventListener("input", scheduleStoreRefresh);
 storeCategory.addEventListener("change", () => void refreshStore());
 storeList.addEventListener("keydown", (event) => {
@@ -1776,6 +2465,37 @@ storeList.addEventListener("keydown", (event) => {
   }
 });
 appsSearch.addEventListener("input", scheduleMyAppsRefresh);
+launchpadList.addEventListener("keydown", (event) => {
+  if (event.key === "ArrowDown") {
+    event.preventDefault();
+    moveLaunchpadSelection(1);
+  } else if (event.key === "ArrowUp") {
+    event.preventDefault();
+    moveLaunchpadSelection(-1);
+  } else if (event.key === "Home") {
+    event.preventDefault();
+    const first = launchpadEntries.find((entry) =>
+      launchpadSearchText(entry).includes(launchpadSearch.value.trim().toLowerCase()),
+    );
+    if (first) {
+      selectLaunchpadEntry(first.id, true);
+    }
+  } else if (event.key === "End") {
+    event.preventDefault();
+    const query = launchpadSearch.value.trim().toLowerCase();
+    const visible = launchpadEntries.filter((entry) => launchpadSearchText(entry).includes(query));
+    const last = visible.at(-1);
+    if (last) {
+      selectLaunchpadEntry(last.id, true);
+    }
+  } else if (event.key === "Enter") {
+    event.preventDefault();
+    const activeRow = event.target instanceof HTMLButtonElement ? event.target : undefined;
+    if (activeRow?.dataset.launchpadId) {
+      selectLaunchpadEntry(activeRow.dataset.launchpadId, true);
+    }
+  }
+});
 appsList.addEventListener("keydown", (event) => {
   if (event.key === "ArrowDown") {
     event.preventDefault();
@@ -1815,8 +2535,19 @@ appsList.addEventListener("keydown", (event) => {
 });
 
 window.addEventListener("keydown", (event) => {
+  const launchpadShortcut = event.ctrlKey && event.shiftKey && event.code === "KeyL";
   const storeShortcut = event.ctrlKey && event.shiftKey && event.code === "Space";
   const appsShortcut = event.ctrlKey && event.shiftKey && event.code === "KeyA";
+  if (launchpadShortcut) {
+    event.preventDefault();
+    if (storeOpen && activeSurface === "launchpad") {
+      closeSurface();
+    } else {
+      openLaunchpad();
+    }
+    return;
+  }
+
   if (storeShortcut) {
     event.preventDefault();
     if (storeOpen && activeSurface === "store") {
@@ -1860,10 +2591,18 @@ void listen<SessionExited>("session-exited", (event) => {
 
 async function startSession(): Promise<void> {
   const output = new Channel<Uint8Array>();
-  output.onmessage = (chunk) => terminal.write(chunk);
+  const pendingOutput: Uint8Array[] = [];
+  let outputSessionId: string | undefined;
+  output.onmessage = (chunk) => {
+    if (outputSessionId && session?.id === outputSessionId) {
+      terminal.write(chunk);
+    } else if (!outputSessionId) {
+      pendingOutput.push(chunk);
+    }
+  };
 
   try {
-    session = await invoke<SessionInfo>("create_session", {
+    const nextSession = await invoke<SessionInfo>("create_session", {
       request: {
         cols: fitAddon.proposeDimensions()?.cols ?? 120,
         rows: fitAddon.proposeDimensions()?.rows ?? 40,
@@ -1872,6 +2611,11 @@ async function startSession(): Promise<void> {
       },
       onOutput: output,
     });
+    session = nextSession;
+    outputSessionId = nextSession.id;
+    for (const chunk of pendingOutput) {
+      terminal.write(chunk);
+    }
     sessionMeta.textContent = session.shell;
     cwdLabel.textContent = session.cwd;
     setTerminalStatus("ready", "ready");
@@ -1885,4 +2629,5 @@ async function startSession(): Promise<void> {
 }
 
 void startSession();
+void refreshLaunchpad();
 void refreshMyApps();
