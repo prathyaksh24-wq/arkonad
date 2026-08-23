@@ -41,7 +41,7 @@ impl FocusDirection {
     }
 }
 
-#[derive(Debug, Clone, Serialize, PartialEq)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum LayoutNode {
     Leaf {
@@ -56,7 +56,7 @@ pub enum LayoutNode {
 }
 
 impl LayoutNode {
-    fn contains(&self, pane_id: &str) -> bool {
+    pub(crate) fn contains(&self, pane_id: &str) -> bool {
         match self {
             Self::Leaf { pane_id: id } => id == pane_id,
             Self::Split { first, second, .. } => {
@@ -66,14 +66,14 @@ impl LayoutNode {
     }
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FramePane {
     pub id: String,
     pub session: SessionInfo,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FrameTab {
     pub id: String,
@@ -83,7 +83,7 @@ pub struct FrameTab {
     pub focused_pane_id: String,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FrameSnapshot {
     pub tabs: Vec<FrameTab>,
@@ -91,7 +91,7 @@ pub struct FrameSnapshot {
     pub focused_pane_id: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FrameCloseResult {
     pub closed: bool,
@@ -198,23 +198,45 @@ impl FrameModel {
         self.active_tab_id = Some(tab_id);
     }
 
-    fn split_focused(
+    fn split_focused_with_ratio(
         &mut self,
         pane: FramePane,
         orientation: SplitOrientation,
+        ratio: Option<f32>,
     ) -> Result<(), String> {
         let tab = self
             .active_tab_mut()
             .ok_or_else(|| "no active tab to split".to_owned())?;
         let target = tab.focused_pane_id.clone();
         let root = tab.root.clone();
-        let (root, changed) = split_leaf(root, &target, &pane.id, orientation);
+        let ratio = ratio
+            .filter(|ratio| ratio.is_finite())
+            .unwrap_or(DEFAULT_SPLIT_RATIO)
+            .clamp(MIN_SPLIT_RATIO, MAX_SPLIT_RATIO);
+        let (root, changed) = split_leaf(root, &target, &pane.id, orientation, ratio);
         if !changed {
             return Err(format!("focused pane is not present: {target}"));
         }
         tab.root = root;
         tab.panes.push(pane.clone());
         tab.focused_pane_id = pane.id;
+        Ok(())
+    }
+
+    fn set_tab_title(&mut self, tab_id: &str, title: String) -> Result<(), String> {
+        let tab = self
+            .tabs
+            .iter_mut()
+            .find(|tab| tab.id == tab_id)
+            .ok_or_else(|| format!("unknown tab: {tab_id}"))?;
+        let title = title.trim();
+        if title.is_empty() {
+            return Err("tab title cannot be empty".to_owned());
+        }
+        if title.chars().any(char::is_control) {
+            return Err("tab title contains control characters".to_owned());
+        }
+        tab.title = title.to_owned();
         Ok(())
     }
 
@@ -347,6 +369,17 @@ impl FrameModel {
         })
     }
 
+    fn reset(&mut self) -> Vec<String> {
+        let session_ids = self
+            .tabs
+            .iter()
+            .flat_map(|tab| tab.panes.iter().map(|pane| pane.session.id.clone()))
+            .collect();
+        self.tabs.clear();
+        self.active_tab_id = None;
+        session_ids
+    }
+
     fn select_neighboring_tab(&mut self, removed_index: usize) {
         self.active_tab_id = self
             .tabs
@@ -448,12 +481,13 @@ fn split_leaf(
     target: &str,
     new_pane_id: &str,
     new_orientation: SplitOrientation,
+    ratio: f32,
 ) -> (LayoutNode, bool) {
     match node {
         LayoutNode::Leaf { pane_id } if pane_id == target => (
             LayoutNode::Split {
                 orientation: new_orientation,
-                ratio: DEFAULT_SPLIT_RATIO,
+                ratio,
                 first: Box::new(LayoutNode::Leaf { pane_id }),
                 second: Box::new(LayoutNode::Leaf {
                     pane_id: new_pane_id.to_owned(),
@@ -468,7 +502,7 @@ fn split_leaf(
             first,
             second,
         } => {
-            let (first, changed) = split_leaf(*first, target, new_pane_id, new_orientation);
+            let (first, changed) = split_leaf(*first, target, new_pane_id, new_orientation, ratio);
             if changed {
                 return (
                     LayoutNode::Split {
@@ -480,7 +514,8 @@ fn split_leaf(
                     true,
                 );
             }
-            let (second, changed) = split_leaf(*second, target, new_pane_id, new_orientation);
+            let (second, changed) =
+                split_leaf(*second, target, new_pane_id, new_orientation, ratio);
             (
                 LayoutNode::Split {
                     orientation,
@@ -725,6 +760,7 @@ impl FrameRuntime {
         sessions: &SessionManager,
         request: CreateSessionRequest,
         orientation: SplitOrientation,
+        ratio: Option<f32>,
         app: AppHandle,
         output: Channel<Vec<u8>>,
     ) -> Result<FrameSnapshot, String> {
@@ -747,7 +783,7 @@ impl FrameRuntime {
             .model
             .lock()
             .map_err(|_| "frame model lock poisoned".to_owned())?;
-        if let Err(error) = model.split_focused(pane, orientation) {
+        if let Err(error) = model.split_focused_with_ratio(pane, orientation, ratio) {
             let _ = sessions.close(&session_id);
             return Err(error);
         }
@@ -787,6 +823,16 @@ impl FrameRuntime {
             .lock()
             .map_err(|_| "frame model lock poisoned".to_owned())?;
         model.activate_tab(tab_id)?;
+        model.validate()?;
+        Ok(model.snapshot())
+    }
+
+    fn set_tab_title(&self, tab_id: &str, title: String) -> Result<FrameSnapshot, String> {
+        let mut model = self
+            .model
+            .lock()
+            .map_err(|_| "frame model lock poisoned".to_owned())?;
+        model.set_tab_title(tab_id, title)?;
         model.validate()?;
         Ok(model.snapshot())
     }
@@ -915,6 +961,20 @@ impl FrameRuntime {
             snapshot: self.snapshot()?,
         })
     }
+
+    fn reset(&self, sessions: &SessionManager) -> Result<FrameSnapshot, String> {
+        let session_ids = {
+            let mut model = self
+                .model
+                .lock()
+                .map_err(|_| "frame model lock poisoned".to_owned())?;
+            model.reset()
+        };
+        for session_id in session_ids {
+            let _ = sessions.close(&session_id);
+        }
+        self.snapshot()
+    }
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -940,9 +1000,10 @@ pub fn frame_create_split(
     app: AppHandle,
     request: CreateSessionRequest,
     orientation: SplitOrientation,
+    ratio: Option<f32>,
     on_output: Channel<Vec<u8>>,
 ) -> Result<FrameSnapshot, String> {
-    state.create_split(&sessions, request, orientation, app, on_output)
+    state.create_split(&sessions, request, orientation, ratio, app, on_output)
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -959,6 +1020,15 @@ pub fn frame_activate_tab(
     tab_id: String,
 ) -> Result<FrameSnapshot, String> {
     state.activate_tab(&tab_id)
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub fn frame_set_tab_title(
+    state: State<'_, FrameRuntime>,
+    tab_id: String,
+    title: String,
+) -> Result<FrameSnapshot, String> {
+    state.set_tab_title(&tab_id, title)
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -1005,6 +1075,14 @@ pub fn frame_close_tab(
     state.close_tab(&sessions, tab_id.as_deref(), force)
 }
 
+#[tauri::command(rename_all = "camelCase")]
+pub fn frame_reset(
+    state: State<'_, FrameRuntime>,
+    sessions: State<'_, SessionManager>,
+) -> Result<FrameSnapshot, String> {
+    state.reset(&sessions)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1013,6 +1091,7 @@ mod tests {
         SessionInfo {
             id: id.to_owned(),
             shell: shell.to_owned(),
+            shell_path: None,
             cwd: r"C:\workspace".to_owned(),
         }
     }
@@ -1034,10 +1113,18 @@ mod tests {
     fn recursive_layout_supports_split_focus_resize_and_close() {
         let mut model = model_with_tab();
         model
-            .split_focused(pane("pane-2", "session-2"), SplitOrientation::Vertical)
+            .split_focused_with_ratio(
+                pane("pane-2", "session-2"),
+                SplitOrientation::Vertical,
+                None,
+            )
             .expect("first split should be accepted");
         model
-            .split_focused(pane("pane-3", "session-3"), SplitOrientation::Horizontal)
+            .split_focused_with_ratio(
+                pane("pane-3", "session-3"),
+                SplitOrientation::Horizontal,
+                None,
+            )
             .expect("nested split should be accepted");
         model.validate().expect("split tree should remain valid");
 
@@ -1056,7 +1143,11 @@ mod tests {
     fn focus_move_uses_geometry_and_stays_in_the_active_tab() {
         let mut model = model_with_tab();
         model
-            .split_focused(pane("pane-2", "session-2"), SplitOrientation::Vertical)
+            .split_focused_with_ratio(
+                pane("pane-2", "session-2"),
+                SplitOrientation::Vertical,
+                None,
+            )
             .expect("split should be accepted");
         assert_eq!(model.active_tab().unwrap().focused_pane_id, "pane-2");
         assert!(model.focus_direction(FocusDirection::Left));

@@ -38,6 +38,8 @@ pub struct LaunchProcessRequest {
 pub struct SessionInfo {
     pub id: String,
     pub shell: String,
+    #[serde(default)]
+    pub shell_path: Option<String>,
     pub cwd: String,
 }
 
@@ -267,6 +269,7 @@ impl SessionManager {
         Ok(SessionInfo {
             id,
             shell: shell.label,
+            shell_path: Some(shell.executable),
             cwd: cwd.to_string_lossy().into_owned(),
         })
     }
@@ -296,11 +299,13 @@ impl SessionManager {
 
         spawn_output_bridge(id.clone(), session, reader, output, app);
 
+        let shell_path = request.shell.clone();
         Ok(SessionInfo {
             id,
             shell: request
                 .shell
                 .unwrap_or_else(|| "direct executable".to_owned()),
+            shell_path,
             cwd: cwd.to_string_lossy().into_owned(),
         })
     }

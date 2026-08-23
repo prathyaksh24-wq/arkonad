@@ -12,6 +12,7 @@ import { Terminal } from "@xterm/xterm";
 type SessionInfo = {
   id: string;
   shell: string;
+  shellPath: string | null;
   cwd: string;
 };
 
@@ -49,6 +50,35 @@ type FrameSnapshot = {
   tabs: FrameTab[];
   activeTabId: string | null;
   focusedPaneId: string | null;
+};
+
+type WorkspaceSettings = {
+  leaderChord: string;
+};
+
+type WorkspaceDocument = {
+  schemaVersion: number;
+  id: string;
+  name: string;
+  root: string;
+  repositoryRoot: string | null;
+  frame: FrameSnapshot;
+  appPins: string[];
+  launchProfiles: CustomAppProfile[];
+  settings: WorkspaceSettings;
+  savedAt: string;
+};
+
+type WorkspaceLoadResult = {
+  status: "empty" | "ready" | "invalid";
+  message: string;
+  workspace: WorkspaceDocument | null;
+};
+
+type RecoveryPane = {
+  tabId: string;
+  tabTitle: string;
+  pane: FramePane;
 };
 
 type FrameCloseResult = {
@@ -393,6 +423,36 @@ app.innerHTML = `
         <div class="frame-layout" data-frame-layout aria-label="Arkonad workspace"></div>
         <div class="error-panel" data-error hidden></div>
       </section>
+      <section
+        class="workspace-recovery"
+        data-workspace-recovery
+        hidden
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="workspace-recovery-title"
+        aria-describedby="workspace-recovery-description"
+      >
+        <div class="workspace-recovery-card">
+          <header class="workspace-recovery-heading">
+            <span class="store-eyebrow">WORKSPACE RECOVERY</span>
+            <h1 id="workspace-recovery-title">Review before restoring</h1>
+            <p id="workspace-recovery-description" data-workspace-recovery-message>
+              Saved processes are not restarted automatically.
+            </p>
+          </header>
+          <div class="workspace-recovery-list" data-workspace-recovery-list role="list"></div>
+          <div class="workspace-recovery-actions">
+            <button class="detail-action" type="button" data-workspace-restart-all>Restart all and restore layout</button>
+            <button class="detail-action" type="button" data-workspace-open-shell>Open blank shell</button>
+            <button class="store-close" type="button" data-workspace-dismiss>Dismiss Workspace</button>
+          </div>
+          <footer class="store-footer">
+            <span>Restart starts a new shell only</span>
+            <span>Inspect shows saved metadata</span>
+            <span>No commands are replayed</span>
+          </footer>
+        </div>
+      </section>
       <section class="command-overlay" data-command-overlay hidden aria-label="Arkonad command palette">
         <div class="command-card">
           <div class="command-heading">
@@ -538,6 +598,12 @@ const sessionMeta = app.querySelector<HTMLDivElement>("[data-session-meta]")!;
 const status = app.querySelector<HTMLDivElement>("[data-status]")!;
 const cwdLabel = app.querySelector<HTMLSpanElement>("[data-cwd]")!;
 const errorPanel = app.querySelector<HTMLDivElement>("[data-error]")!;
+const workspaceRecovery = app.querySelector<HTMLElement>("[data-workspace-recovery]")!;
+const workspaceRecoveryMessage = app.querySelector<HTMLElement>("[data-workspace-recovery-message]")!;
+const workspaceRecoveryList = app.querySelector<HTMLDivElement>("[data-workspace-recovery-list]")!;
+const workspaceRestartAllButton = app.querySelector<HTMLButtonElement>("[data-workspace-restart-all]")!;
+const workspaceOpenShellButton = app.querySelector<HTMLButtonElement>("[data-workspace-open-shell]")!;
+const workspaceDismissButton = app.querySelector<HTMLButtonElement>("[data-workspace-dismiss]")!;
 const launchpadOpenButton = app.querySelector<HTMLButtonElement>("[data-launchpad-open]")!;
 const storeOpenButton = app.querySelector<HTMLButtonElement>("[data-store-open]")!;
 const appsOpenButton = app.querySelector<HTMLButtonElement>("[data-apps-open]")!;
@@ -582,6 +648,12 @@ if (
   !status ||
   !cwdLabel ||
   !errorPanel ||
+  !workspaceRecovery ||
+  !workspaceRecoveryMessage ||
+  !workspaceRecoveryList ||
+  !workspaceRestartAllButton ||
+  !workspaceOpenShellButton ||
+  !workspaceDismissButton ||
   !launchpadOpenButton ||
   !storeOpenButton ||
   !appsOpenButton ||
@@ -662,6 +734,16 @@ let selectedCommandId: string | undefined;
 let pendingClose: "pane" | "tab" | undefined;
 const leaderStorageKey = "arkonad.leader-chord";
 let leaderChord = localStorage.getItem(leaderStorageKey) ?? "ctrl+space";
+let activeWorkspaceId: string | null = null;
+let activeWorkspaceName = "Arkonad Workspace";
+let pendingWorkspace: WorkspaceDocument | null = null;
+let workspaceRecoveryOpen = false;
+let workspaceRestoring = false;
+let workspaceMetadataReady = false;
+let launchpadMetadataReady = false;
+let customAppMetadataReady = false;
+let workspaceSaveTimer: number | undefined;
+let workspaceSaveInFlight: Promise<void> | undefined;
 
 function renderTerminalStatus(): void {
   status.textContent = terminalStatusText;
@@ -869,6 +951,7 @@ function renderLayoutNode(node: LayoutNode, tab: FrameTab, parent: HTMLElement):
 function renderFrame(nextSnapshot: FrameSnapshot, focusActive = true): void {
   frameSnapshot = nextSnapshot;
   updateFocusedSession();
+  scheduleWorkspaceSave();
 
   const visiblePaneIds = new Set(
     frameSnapshot.tabs.flatMap((tab) => tab.panes.map((pane) => pane.id)),
@@ -1012,6 +1095,7 @@ function showSettings(): void {
     localStorage.setItem(leaderStorageKey, leaderChord);
     leaderHint.textContent = `Leader ${leaderLabel()}`;
     showCommandMessage(`Leader saved as ${leaderLabel()}.`);
+    scheduleWorkspaceSave();
   });
   row.append(input, save);
   commandMessage.append(title, description, row);
@@ -1046,6 +1130,36 @@ function frameCommands(): FrameCommand[] {
       run: () => {
         closeCommandOverlay();
         openLaunchpad();
+      },
+    },
+    {
+      id: "save-workspace",
+      label: "Workspace · Save",
+      description: "Save the current layout and local Workspace metadata.",
+      run: async () => {
+        const requestedName = window.prompt("Workspace name", activeWorkspaceName);
+        if (requestedName === null) {
+          return;
+        }
+        activeWorkspaceName = requestedName.trim() || activeWorkspaceName;
+        await saveWorkspaceNow();
+        showCommandMessage(`Workspace saved as ${activeWorkspaceName}.`);
+      },
+    },
+    {
+      id: "restore-workspace",
+      label: "Workspace · Restore",
+      description: "Review the last saved Workspace before restarting sessions.",
+      run: async () => {
+        const result = await invoke<WorkspaceLoadResult>("workspace_load", {
+          workspaceId: activeWorkspaceId,
+        });
+        if (result.status === "ready" && result.workspace) {
+          closeCommandOverlay();
+          openWorkspaceRecovery(result.workspace, result.message);
+        } else {
+          showCommandMessage(result.message);
+        }
       },
     },
     {
@@ -1259,6 +1373,453 @@ function frameRequest(): { cols: number; rows: number; cwd: string | null; shell
   };
 }
 
+function firstSavedLeafId(node: LayoutNode): string {
+  return node.kind === "leaf" ? node.paneId : firstSavedLeafId(node.first);
+}
+
+function savedPaneById(document: WorkspaceDocument, paneId: string): FramePane | undefined {
+  return document.frame.tabs
+    .flatMap((tab) => tab.panes)
+    .find((pane) => pane.id === paneId);
+}
+
+function recoveryPanes(document: WorkspaceDocument): RecoveryPane[] {
+  return document.frame.tabs.flatMap((tab) =>
+    tab.panes.map((pane) => ({
+      tabId: tab.id,
+      tabTitle: tab.title,
+      pane,
+    })),
+  );
+}
+
+function savedSessionRequest(pane: FramePane): {
+  cols: number;
+  rows: number;
+  cwd: string | null;
+  shell: string | null;
+} {
+  return {
+    cols: 120,
+    rows: 40,
+    cwd: pane.session.cwd,
+    shell: pane.session.shellPath,
+  };
+}
+
+function removePaneFromSavedLayout(node: LayoutNode, paneId: string): LayoutNode | null {
+  if (node.kind === "leaf") {
+    return node.paneId === paneId ? null : node;
+  }
+  const first = removePaneFromSavedLayout(node.first, paneId);
+  if (!first) {
+    return node.second;
+  }
+  const second = removePaneFromSavedLayout(node.second, paneId);
+  if (!second) {
+    return first;
+  }
+  return { ...node, first, second };
+}
+
+function dismissRecoveryPane(paneId: string): void {
+  if (!pendingWorkspace) {
+    return;
+  }
+  const tabs = pendingWorkspace.frame.tabs
+    .map((tab) => {
+      const root = removePaneFromSavedLayout(tab.root, paneId);
+      if (!root) {
+        return null;
+      }
+      const panes = tab.panes.filter((pane) => pane.id !== paneId);
+      const focusedPaneId = panes.some((pane) => pane.id === tab.focusedPaneId)
+        ? tab.focusedPaneId
+        : firstSavedLeafId(root);
+      return { ...tab, root, panes, focusedPaneId };
+    })
+    .filter((tab): tab is FrameTab => tab !== null);
+  const activeTabId = tabs.some((tab) => tab.id === pendingWorkspace!.frame.activeTabId)
+    ? pendingWorkspace.frame.activeTabId
+    : tabs[0]?.id ?? null;
+  const focusedPaneId = tabs
+    .flatMap((tab) => tab.panes)
+    .some((pane) => pane.id === pendingWorkspace!.frame.focusedPaneId)
+    ? pendingWorkspace.frame.focusedPaneId
+    : tabs[0]?.focusedPaneId ?? null;
+  pendingWorkspace = {
+    ...pendingWorkspace,
+    frame: { ...pendingWorkspace.frame, tabs, activeTabId, focusedPaneId },
+  };
+  renderWorkspaceRecovery();
+}
+
+function renderWorkspaceRecovery(): void {
+  workspaceRecoveryList.replaceChildren();
+  const document = pendingWorkspace;
+  if (!document) {
+    return;
+  }
+  const panes = recoveryPanes(document);
+  if (panes.length === 0) {
+    workspaceRecoveryList.append(
+      makeElement("p", "detail-empty", "No interrupted sessions remain. Open a blank shell to continue."),
+    );
+    workspaceRestartAllButton.disabled = true;
+    return;
+  }
+  workspaceRestartAllButton.disabled = workspaceRestoring;
+  for (const recovery of panes) {
+    const row = makeElement("article", "workspace-recovery-row");
+    const heading = makeElement("div", "workspace-recovery-row-heading");
+    heading.append(
+      makeElement("strong", undefined, `${recovery.tabTitle} · ${recovery.pane.session.shell}`),
+      makeElement("span", "workspace-recovery-state", "Interrupted"),
+    );
+    row.append(heading);
+    row.append(makeElement("p", "workspace-recovery-path", recovery.pane.session.cwd));
+    const details = makeElement("p", "workspace-recovery-details");
+    details.hidden = true;
+    details.textContent = [
+      `Saved pane: ${recovery.pane.id}`,
+      `Saved session: ${recovery.pane.session.id}`,
+      `Shell profile: ${recovery.pane.session.shellPath ?? "default shell"}`,
+      `Tab: ${recovery.tabId}`,
+    ].join(" · ");
+    row.append(details);
+    const actions = makeElement("div", "install-button-row");
+    const restart = makeElement("button", "detail-action", "Restart") as HTMLButtonElement;
+    restart.type = "button";
+    restart.disabled = workspaceRestoring;
+    restart.addEventListener("click", () => void restartRecoveryPane(recovery));
+    const inspect = makeElement("button", "detail-action", "Inspect metadata") as HTMLButtonElement;
+    inspect.type = "button";
+    inspect.addEventListener("click", () => {
+      details.hidden = !details.hidden;
+      inspect.textContent = details.hidden ? "Inspect metadata" : "Hide metadata";
+    });
+    const dismiss = makeElement("button", "detail-action", "Dismiss") as HTMLButtonElement;
+    dismiss.type = "button";
+    dismiss.disabled = workspaceRestoring;
+    dismiss.addEventListener("click", () => dismissRecoveryPane(recovery.pane.id));
+    actions.append(restart, inspect, dismiss);
+    row.append(actions);
+    workspaceRecoveryList.append(row);
+  }
+}
+
+function openWorkspaceRecovery(document: WorkspaceDocument, message: string): void {
+  pendingWorkspace = document;
+  activeWorkspaceId = document.id;
+  activeWorkspaceName = document.name;
+  const savedLeaderChord = document.settings?.leaderChord;
+  if (typeof savedLeaderChord === "string" && savedLeaderChord.trim()) {
+    leaderChord = normalizedLeader(savedLeaderChord);
+    localStorage.setItem(leaderStorageKey, leaderChord);
+    leaderHint.textContent = `Leader ${leaderLabel()}`;
+  }
+  workspaceRecoveryOpen = true;
+  workspaceRecovery.hidden = false;
+  terminalShell.hidden = true;
+  launchpadView.hidden = true;
+  storeView.hidden = true;
+  appsView.hidden = true;
+  commandOverlay.hidden = true;
+  commandOverlayOpen = false;
+  storeOpen = false;
+  launchpadOpenButton.setAttribute("aria-expanded", "false");
+  storeOpenButton.setAttribute("aria-expanded", "false");
+  appsOpenButton.setAttribute("aria-expanded", "false");
+  workspaceRecoveryMessage.textContent = message;
+  renderWorkspaceRecovery();
+  status.textContent = "workspace recovery";
+  status.dataset.state = "ready";
+  window.requestAnimationFrame(() => workspaceRestartAllButton.focus());
+}
+
+function closeWorkspaceRecovery(): void {
+  workspaceRecoveryOpen = false;
+  workspaceRecovery.hidden = true;
+  terminalShell.hidden = false;
+  renderTerminalStatus();
+  paneRuntimes.get(frameSnapshot.focusedPaneId ?? "")?.terminal.focus();
+}
+
+async function discardWorkspaceAndOpenShell(): Promise<void> {
+  const workspaceId = pendingWorkspace?.id ?? activeWorkspaceId;
+  try {
+    await invoke("workspace_delete", { workspaceId });
+  } catch (error) {
+    showError(`Could not dismiss the saved Workspace: ${String(error)}`);
+  }
+  pendingWorkspace = null;
+  activeWorkspaceId = null;
+  closeWorkspaceRecovery();
+  if (frameSnapshot.tabs.length > 0) {
+    try {
+      renderFrame(await invoke<FrameSnapshot>("frame_reset"), false);
+    } catch (error) {
+      showError(`Could not clear the interrupted Workspace: ${String(error)}`);
+    }
+  }
+  await startSession();
+}
+
+async function createFrameSessionWithRequest(
+  request: { cols: number; rows: number; cwd: string | null; shell: string | null },
+  split?: { orientation: SplitOrientation; ratio?: number },
+): Promise<{ snapshot: FrameSnapshot; sessionId: string }> {
+  const output = new Channel<Uint8Array>();
+  const pendingOutput: Uint8Array[] = [];
+  let outputSessionId: string | undefined;
+  let accepted = false;
+  output.onmessage = (chunk) => {
+    if (accepted && outputSessionId) {
+      writeToPane(outputSessionId, chunk);
+    } else {
+      pendingOutput.push(chunk);
+    }
+  };
+  const nextSnapshot = split
+    ? await invoke<FrameSnapshot>("frame_create_split", {
+        request,
+        orientation: split.orientation,
+        ratio: split.ratio ?? null,
+        onOutput: output,
+      })
+    : await invoke<FrameSnapshot>("frame_create_tab", {
+        request,
+        onOutput: output,
+      });
+  outputSessionId = nextSnapshot.focusedPaneId
+    ? nextSnapshot.tabs
+        .flatMap((tab) => tab.panes)
+        .find((pane) => pane.id === nextSnapshot.focusedPaneId)?.session.id
+    : undefined;
+  if (!outputSessionId) {
+    throw new Error("restored session did not produce a focused pane");
+  }
+  renderFrame(nextSnapshot, false);
+  accepted = true;
+  for (const chunk of pendingOutput) {
+    writeToPane(outputSessionId, chunk);
+  }
+  return { snapshot: nextSnapshot, sessionId: outputSessionId };
+}
+
+async function createRecoverySession(
+  request: { cols: number; rows: number; cwd: string | null; shell: string | null },
+  split?: { orientation: SplitOrientation; ratio?: number },
+): Promise<{ snapshot: FrameSnapshot; sessionId: string }> {
+  try {
+    return await createFrameSessionWithRequest(request, split);
+  } catch (firstError) {
+    if (!request.cwd && !request.shell) {
+      throw firstError;
+    }
+    workspaceRecoveryMessage.textContent =
+      `A saved shell or directory is unavailable (${String(firstError)}). Retrying with the current default shell and directory.`;
+    return createFrameSessionWithRequest({ ...request, cwd: null, shell: null }, split);
+  }
+}
+
+async function restartRecoveryPane(recovery: RecoveryPane): Promise<void> {
+  if (workspaceRestoring) {
+    return;
+  }
+  workspaceRestoring = true;
+  renderWorkspaceRecovery();
+  try {
+    const result = await createRecoverySession(savedSessionRequest(recovery.pane));
+    if (result.snapshot.activeTabId && recovery.tabTitle.trim()) {
+      renderFrame(
+        await invoke<FrameSnapshot>("frame_set_tab_title", {
+          tabId: result.snapshot.activeTabId,
+          title: recovery.tabTitle,
+        }),
+        false,
+      );
+    }
+    pendingWorkspace = null;
+    closeWorkspaceRecovery();
+    setTerminalStatus("session restarted", "ready");
+    scheduleWorkspaceSave();
+  } catch (error) {
+    workspaceRecoveryMessage.textContent = `Could not restart the saved session: ${String(error)}`;
+    setTerminalStatus("workspace recovery", "error");
+  } finally {
+    workspaceRestoring = false;
+    if (workspaceRecoveryOpen) {
+      renderWorkspaceRecovery();
+    }
+  }
+}
+
+async function restoreSavedNode(
+  node: LayoutNode,
+  document: WorkspaceDocument,
+  paneMap: Map<string, string>,
+): Promise<void> {
+  if (node.kind === "leaf") {
+    return;
+  }
+  const firstAnchor = firstSavedLeafId(node.first);
+  const secondAnchor = firstSavedLeafId(node.second);
+  const firstPaneId = paneMap.get(firstAnchor);
+  const secondPane = savedPaneById(document, secondAnchor);
+  if (!firstPaneId || !secondPane) {
+    throw new Error("saved split references a missing pane");
+  }
+  if (frameSnapshot.focusedPaneId !== firstPaneId) {
+    renderFrame(await invoke<FrameSnapshot>("frame_focus_pane", { paneId: firstPaneId }), false);
+  }
+  const result = await createRecoverySession(savedSessionRequest(secondPane), {
+    orientation: node.orientation,
+    ratio: node.ratio,
+  });
+  const newPaneId = result.snapshot.focusedPaneId;
+  if (!newPaneId) {
+    throw new Error("saved split did not produce a focused pane");
+  }
+  paneMap.set(secondAnchor, newPaneId);
+  await restoreSavedNode(node.first, document, paneMap);
+  await restoreSavedNode(node.second, document, paneMap);
+}
+
+async function restoreWorkspace(): Promise<void> {
+  const document = pendingWorkspace;
+  if (!document || workspaceRestoring) {
+    return;
+  }
+  if (document.frame.tabs.length === 0) {
+    await discardWorkspaceAndOpenShell();
+    return;
+  }
+  workspaceRestoring = true;
+  workspaceSaveTimer && window.clearTimeout(workspaceSaveTimer);
+  workspaceRecoveryMessage.textContent = `Restoring ${document.name} without replaying saved commands…`;
+  renderWorkspaceRecovery();
+  try {
+    const paneMap = new Map<string, string>();
+    const tabMap = new Map<string, string>();
+    for (const tab of document.frame.tabs) {
+      const firstPane = savedPaneById(document, firstSavedLeafId(tab.root));
+      if (!firstPane) {
+        throw new Error(`tab ${tab.id} has no first pane`);
+      }
+      const result = await createRecoverySession(savedSessionRequest(firstPane));
+      const newTabId = result.snapshot.activeTabId;
+      const newPaneId = result.snapshot.focusedPaneId;
+      if (!newTabId || !newPaneId) {
+        throw new Error(`tab ${tab.id} did not restore`);
+      }
+      tabMap.set(tab.id, newTabId);
+      paneMap.set(firstPane.id, newPaneId);
+      if (tab.title.trim()) {
+        renderFrame(
+          await invoke<FrameSnapshot>("frame_set_tab_title", {
+            tabId: newTabId,
+            title: tab.title,
+          }),
+          false,
+        );
+      }
+      await restoreSavedNode(tab.root, document, paneMap);
+    }
+    const restoredActiveTabId = document.frame.activeTabId
+      ? tabMap.get(document.frame.activeTabId)
+      : undefined;
+    if (restoredActiveTabId) {
+      renderFrame(await invoke<FrameSnapshot>("frame_activate_tab", { tabId: restoredActiveTabId }), false);
+    }
+    const restoredFocusedPaneId = document.frame.focusedPaneId
+      ? paneMap.get(document.frame.focusedPaneId)
+      : undefined;
+    if (restoredFocusedPaneId) {
+      renderFrame(await invoke<FrameSnapshot>("frame_focus_pane", { paneId: restoredFocusedPaneId }), false);
+    }
+    pendingWorkspace = null;
+    closeWorkspaceRecovery();
+    setTerminalStatus("Workspace restored", "ready");
+    scheduleWorkspaceSave();
+  } catch (error) {
+    workspaceRecoveryMessage.textContent = `Workspace restore stopped safely: ${String(error)}. Choose a session to restart or open a blank shell.`;
+    setTerminalStatus("workspace recovery", "error");
+  } finally {
+    workspaceRestoring = false;
+    if (workspaceRecoveryOpen) {
+      renderWorkspaceRecovery();
+    }
+  }
+}
+
+async function saveWorkspaceNow(): Promise<void> {
+  if (
+    workspaceRestoring ||
+    !workspaceMetadataReady ||
+    frameSnapshot.tabs.length === 0 ||
+    workspaceSaveInFlight
+  ) {
+    return workspaceSaveInFlight ?? Promise.resolve();
+  }
+  const root = focusedPane()?.session.cwd;
+  if (!root) {
+    return;
+  }
+  workspaceSaveInFlight = (async () => {
+    const document = await invoke<WorkspaceDocument>("workspace_save", {
+      request: {
+        workspaceId: activeWorkspaceId,
+        name: activeWorkspaceName,
+        root,
+        repositoryRoot: null,
+        frame: frameSnapshot,
+        appPins: launchpadEntries.filter((entry) => entry.pinned).map((entry) => entry.id),
+        launchProfiles: customAppEntries,
+        settings: { leaderChord },
+      },
+    });
+    activeWorkspaceId = document.id;
+    activeWorkspaceName = document.name;
+  })();
+  try {
+    await workspaceSaveInFlight;
+  } catch (error) {
+    showError(`Could not save Workspace metadata: ${String(error)}`);
+  } finally {
+    workspaceSaveInFlight = undefined;
+  }
+}
+
+function scheduleWorkspaceSave(): void {
+  if (workspaceRestoring || !workspaceMetadataReady) {
+    return;
+  }
+  if (workspaceSaveTimer !== undefined) {
+    window.clearTimeout(workspaceSaveTimer);
+  }
+  workspaceSaveTimer = window.setTimeout(() => {
+    workspaceSaveTimer = undefined;
+    void saveWorkspaceNow();
+  }, 220);
+}
+
+async function loadWorkspaceOnStartup(): Promise<void> {
+  try {
+    const result = await invoke<WorkspaceLoadResult>("workspace_load", { workspaceId: null });
+    if (result.status === "ready" && result.workspace) {
+      openWorkspaceRecovery(result.workspace, result.message);
+      return;
+    }
+    if (result.status === "invalid") {
+      showError(result.message);
+    }
+  } catch (error) {
+    showError(`Could not read Workspace state: ${String(error)}. A blank shell is safe to use.`);
+  }
+  await startSession();
+}
+
 async function createFrameTab(): Promise<void> {
   const output = new Channel<Uint8Array>();
   const pendingOutput: Uint8Array[] = [];
@@ -1313,6 +1874,7 @@ async function splitFrame(orientation: SplitOrientation): Promise<void> {
     const nextSnapshot = await invoke<FrameSnapshot>("frame_create_split", {
       request: frameRequest(),
       orientation,
+      ratio: null,
       onOutput: output,
     });
     outputSessionId = nextSnapshot.focusedPaneId
@@ -2322,6 +2884,9 @@ async function refreshLaunchpad(): Promise<void> {
     launchpadNotice.textContent =
       "Only Ready or Detected Installations appear. Pins, new installs, then recent tools lead the list.";
     renderLaunchpadList();
+    launchpadMetadataReady = true;
+    workspaceMetadataReady = launchpadMetadataReady && customAppMetadataReady;
+    scheduleWorkspaceSave();
   } catch (error) {
     if (requestId !== launchpadRequestId) {
       return;
@@ -2758,6 +3323,8 @@ async function refreshMyApps(): Promise<void> {
     }
     myAppsEntries = snapshot.entries;
     customAppEntries = customApps;
+    customAppMetadataReady = true;
+    workspaceMetadataReady = launchpadMetadataReady && customAppMetadataReady;
     const updateLabel =
       snapshot.updatesAvailable === 1
         ? "1 reviewed update available"
@@ -2773,6 +3340,7 @@ async function refreshMyApps(): Promise<void> {
         ? "Detected installations stay external; managed actions use their recorded method."
         : `${updateLabel}. Review before installing; Arkonad will not update automatically.`;
     renderMyAppsList();
+    scheduleWorkspaceSave();
   } catch (error) {
     if (requestId !== myAppsRequestId) {
       return;
@@ -3255,7 +3823,18 @@ appsList.addEventListener("keydown", (event) => {
   }
 });
 
+workspaceRestartAllButton.addEventListener("click", () => void restoreWorkspace());
+workspaceOpenShellButton.addEventListener("click", () => void discardWorkspaceAndOpenShell());
+workspaceDismissButton.addEventListener("click", () => void discardWorkspaceAndOpenShell());
+
 window.addEventListener("keydown", (event) => {
+  if (workspaceRecoveryOpen) {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      void discardWorkspaceAndOpenShell();
+    }
+    return;
+  }
   if (commandOverlayOpen) {
     if (event.key === "Escape" && event.target !== commandSearch) {
       event.preventDefault();
@@ -3279,6 +3858,7 @@ window.addEventListener("keydown", (event) => {
 
 window.addEventListener("resize", scheduleResize);
 window.addEventListener("beforeunload", () => {
+  void saveWorkspaceNow();
   const sessionIds = new Set(frameSnapshot.tabs.flatMap((tab) => tab.panes.map((pane) => pane.session.id)));
   for (const id of sessionIds) {
     void invoke("close_session", { id });
@@ -3333,6 +3913,6 @@ async function startSession(): Promise<void> {
 }
 
 leaderHint.textContent = `Leader ${leaderLabel()}`;
-void startSession();
+void loadWorkspaceOnStartup();
 void refreshLaunchpad();
 void refreshMyApps();
