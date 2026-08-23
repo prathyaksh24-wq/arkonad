@@ -1,3 +1,4 @@
+mod agent;
 mod catalog;
 mod frame;
 mod installer;
@@ -5,6 +6,7 @@ mod launcher;
 mod pty;
 mod workspace;
 
+use agent::AgentSupervisorRuntime;
 use catalog::CatalogRuntime;
 use frame::FrameRuntime;
 use installer::InstallRuntime;
@@ -15,6 +17,7 @@ use workspace::WorkspaceRuntime;
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_clipboard_manager::init())
+        .manage(AgentSupervisorRuntime::default())
         .manage(CatalogRuntime::builtins())
         .manage(InstallRuntime::default())
         .manage(LaunchRuntime::default())
@@ -22,6 +25,15 @@ fn main() {
         .manage(SessionManager::default())
         .manage(WorkspaceRuntime::default())
         .invoke_handler(tauri::generate_handler![
+            agent::agent_supervision_snapshot,
+            agent::agent_supervision_register,
+            agent::agent_supervision_observe_output,
+            agent::agent_supervision_bind_workspace,
+            agent::agent_supervision_provider_event,
+            agent::agent_supervision_process_exited,
+            agent::agent_follow_up_submit,
+            agent::agent_follow_up_deliver,
+            agent::agent_attention_acknowledge,
             catalog::catalog_detect,
             catalog::catalog_list,
             installer::install_execute,

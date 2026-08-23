@@ -156,6 +156,18 @@ select {
   text-align: center;
 }
 
+.attention-badge {
+  min-width: 16px;
+  padding: 1px 4px;
+  border: 1px solid #a85f2c;
+  border-radius: 8px;
+  background: #3a2113;
+  color: #ffcf70;
+  font-size: 9px;
+  line-height: 12px;
+  text-align: center;
+}
+
 .terminal-shell {
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
@@ -1329,6 +1341,11 @@ select {
   background: #10161b;
 }
 
+.workspace-recovery-row.is-targeted {
+  border-color: #ff9c4a;
+  box-shadow: 0 0 0 1px rgba(255, 156, 74, 0.16);
+}
+
 .workspace-recovery-row-heading {
   display: flex;
   align-items: center;
@@ -1523,6 +1540,65 @@ select {
 .agent-start-button:disabled {
   cursor: wait;
   opacity: 0.55;
+}
+
+.store-row-state.status-warning {
+  color: #ffcf70;
+}
+
+.store-row-state.status-error {
+  color: #ff766b;
+}
+
+.attention-item,
+.follow-up-item {
+  display: grid;
+  gap: 5px;
+  padding: 8px;
+  border: 1px solid #29343d;
+  background: #0c1014;
+}
+
+.attention-item + .attention-item,
+.follow-up-item + .follow-up-item {
+  margin-top: 7px;
+}
+
+.attention-item strong,
+.follow-up-item strong {
+  color: #e8ecef;
+  font-size: 11px;
+}
+
+.attention-item p,
+.follow-up-item p {
+  margin: 0;
+  color: #cdd5da;
+  font-size: 11px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.attention-approval {
+  border-left: 2px solid #ffcf70;
+}
+
+.attention-question {
+  border-left: 2px solid #83b8ff;
+}
+
+.attention-failure {
+  border-left: 2px solid #ff766b;
+}
+
+.attention-completion {
+  border-left: 2px solid #9ed67a;
+}
+
+.attention-item-source {
+  color: #7e8a95;
+  font-size: 10px;
+  line-height: 1.35;
 }
 
 [hidden] {
