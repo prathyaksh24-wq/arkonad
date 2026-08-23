@@ -6,6 +6,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::sync_channel;
 use std::sync::{Arc, Mutex};
 use std::thread;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize};
 use serde::{Deserialize, Serialize};
@@ -14,6 +15,7 @@ use tauri::{AppHandle, Emitter, State};
 
 const OUTPUT_QUEUE_CAPACITY: usize = 64;
 const OUTPUT_CHUNK_SIZE: usize = 16 * 1024;
+static NEXT_MANAGER_ID: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -238,13 +240,34 @@ impl ManagedSession {
     }
 }
 
-#[derive(Default)]
 pub struct SessionManager {
+    runtime_id: String,
     next_id: AtomicU64,
     sessions: Mutex<HashMap<String, Arc<ManagedSession>>>,
 }
 
+impl Default for SessionManager {
+    fn default() -> Self {
+        let started_at = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let manager_id = NEXT_MANAGER_ID.fetch_add(1, Ordering::Relaxed);
+
+        Self {
+            runtime_id: format!("{}-{started_at}-{manager_id}", std::process::id()),
+            next_id: AtomicU64::new(0),
+            sessions: Mutex::new(HashMap::new()),
+        }
+    }
+}
+
 impl SessionManager {
+    fn next_session_id(&self) -> String {
+        let session_id = self.next_id.fetch_add(1, Ordering::Relaxed);
+        format!("session-{}-{session_id}", self.runtime_id)
+    }
+
     pub(crate) fn create(
         &self,
         request: CreateSessionRequest,
@@ -262,7 +285,7 @@ impl SessionManager {
         let (pty, reader) = PtySession::spawn(&shell, &cwd, size)
             .map_err(|error| format!("could not start {}: {error}", shell.label))?;
         let session = Arc::new(ManagedSession { pty });
-        let id = format!("session-{}", self.next_id.fetch_add(1, Ordering::Relaxed));
+        let id = self.next_session_id();
 
         self.sessions
             .lock()
@@ -295,7 +318,7 @@ impl SessionManager {
         let (pty, reader) = PtySession::spawn_launch(&request, size)
             .map_err(|error| format!("could not start {}: {error}", request.executable))?;
         let session = Arc::new(ManagedSession { pty });
-        let id = format!("session-{}", self.next_id.fetch_add(1, Ordering::Relaxed));
+        let id = self.next_session_id();
 
         self.sessions
             .lock()
@@ -328,6 +351,10 @@ impl SessionManager {
         self.get(id)
             .and_then(|session| session.pty.is_running().map_err(|error| error.to_string()))
             .unwrap_or(false)
+    }
+
+    pub(crate) fn write(&self, id: &str, data: &[u8]) -> Result<(), String> {
+        self.get(id)?.write(data).map_err(|error| error.to_string())
     }
 
     pub(crate) fn close(&self, id: &str) -> Result<(), String> {
@@ -417,10 +444,7 @@ pub fn write_session(
     id: String,
     data: Vec<u8>,
 ) -> Result<(), String> {
-    state
-        .get(&id)?
-        .write(&data)
-        .map_err(|error| error.to_string())
+    state.write(&id, &data)
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -687,6 +711,21 @@ mod tests {
         } else if command_exists("powershell.exe") {
             assert_eq!(shell.label, "Windows PowerShell");
         }
+    }
+
+    #[test]
+    fn session_ids_do_not_repeat_between_manager_instances() {
+        let first_manager = SessionManager::default();
+        let second_manager = SessionManager::default();
+
+        assert_ne!(
+            first_manager.next_session_id(),
+            second_manager.next_session_id()
+        );
+        assert_ne!(
+            first_manager.next_session_id(),
+            first_manager.next_session_id()
+        );
     }
 
     #[test]

@@ -229,6 +229,79 @@ type AgentLaunchContext = {
   workspaceRoot: string | null;
 };
 
+type AgentSessionState =
+  | "starting"
+  | "working"
+  | "waitingForInput"
+  | "waitingForApproval"
+  | "done"
+  | "failed"
+  | "stopped"
+  | "interrupted";
+type AgentStateSource = "process" | "providerEvent" | "outputObservation";
+type AttentionKind = "approval" | "question" | "failure" | "completion";
+type AgentFollowUpStatus = "queued" | "delivering" | "delivered";
+
+type AgentAdapterCapability = {
+  agentId: string;
+  verified: boolean;
+  declaredEventSource: string | null;
+  supportsSteer: boolean;
+  nativeTuiNote: string;
+};
+
+type AgentAttentionItem = {
+  id: string;
+  kind: AttentionKind;
+  message: string;
+  source: AgentStateSource;
+  acknowledged: boolean;
+  createdAt: string;
+};
+
+type AgentFollowUp = {
+  id: string;
+  message: string;
+  requestedMode: AgentFollowUpMode;
+  effectiveMode: AgentFollowUpMode;
+  status: AgentFollowUpStatus;
+  statusMessage: string;
+  createdAt: string;
+  deliveredAt: string | null;
+};
+
+type AgentSessionRecord = {
+  id: string;
+  sessionId: string;
+  workspaceId: string | null;
+  workspaceName: string;
+  workspaceRoot: string;
+  tabId: string | null;
+  paneId: string | null;
+  agentId: string;
+  agentName: string;
+  state: AgentSessionState;
+  stateSource: AgentStateSource;
+  stateDetail: string;
+  followUpMode: AgentFollowUpMode;
+  adapter: AgentAdapterCapability;
+  enhancedEventsActive: boolean;
+  attention: AgentAttentionItem[];
+  followUps: AgentFollowUp[];
+  createdAt: string;
+  updatedAt: string;
+};
+
+type AgentSupervisionSnapshot = {
+  sessions: AgentSessionRecord[];
+  adapters: AgentAdapterCapability[];
+};
+
+type AgentFollowUpResult = {
+  followUp: AgentFollowUp;
+  session: AgentSessionRecord;
+};
+
 type LaunchpadEntry = {
   id: string;
   source: "catalog" | "custom";
@@ -600,6 +673,10 @@ app.innerHTML = `
       <button class="topbar-action" type="button" data-agents-open aria-expanded="false">
         Agents <span class="key-hint">palette</span>
       </button>
+      <button class="topbar-action" type="button" data-attention-open aria-expanded="false">
+        Attention <span class="attention-badge" data-attention-badge hidden aria-live="polite"></span>
+        <span class="key-hint">palette</span>
+      </button>
       <div class="status" data-status>connecting</div>
     </header>
     <main class="workspace">
@@ -851,12 +928,46 @@ app.innerHTML = `
           <span>Esc terminal</span>
         </div>
       </section>
+      <section class="store-shell attention-queue" data-attention-view hidden aria-label="Attention Queue">
+        <div class="store-toolbar">
+          <div class="store-heading">
+            <span class="store-eyebrow">ATTENTION QUEUE</span>
+            <span class="store-title">Approvals, questions, failures, completion, and queued follow-ups</span>
+          </div>
+          <label class="store-control">
+            <span>Search</span>
+            <input data-attention-search type="search" placeholder="workspace, agent, state" autocomplete="off" />
+          </label>
+          <button class="store-close" type="button" data-attention-close>Esc · terminal</button>
+        </div>
+        <div class="store-notice" data-attention-notice>
+          Every state names its evidence source. Output observations are marked uncertain.
+        </div>
+        <div class="store-content">
+          <section class="store-list-panel" aria-label="Agent sessions needing attention">
+            <div class="store-list-header">
+              <span>Sessions</span>
+              <span data-attention-count>loading…</span>
+            </div>
+            <div class="store-list" data-attention-list role="listbox" aria-label="Supervised agent sessions"></div>
+            <div class="store-error" data-attention-error hidden></div>
+          </section>
+          <article class="store-detail" data-attention-detail aria-live="polite"></article>
+        </div>
+        <div class="store-footer">
+          <span>↑↓ choose session</span>
+          <span>Enter inspect</span>
+          <span>Return exact context</span>
+          <span>Esc terminal</span>
+        </div>
+      </section>
     </main>
     <footer class="bottombar">
       <span>Leader opens commands</span>
       <span>Palette: Launch App</span>
       <span>Palette: Store</span>
       <span>Palette: My Apps</span>
+      <span>Palette: Attention</span>
       <span>Palette: New Tab</span>
       <span>Palette: Split</span>
       <span data-cwd></span>
@@ -885,6 +996,8 @@ const launchpadOpenButton = app.querySelector<HTMLButtonElement>("[data-launchpa
 const storeOpenButton = app.querySelector<HTMLButtonElement>("[data-store-open]")!;
 const appsOpenButton = app.querySelector<HTMLButtonElement>("[data-apps-open]")!;
 const agentsOpenButton = app.querySelector<HTMLButtonElement>("[data-agents-open]")!;
+const attentionOpenButton = app.querySelector<HTMLButtonElement>("[data-attention-open]")!;
+const attentionBadge = app.querySelector<HTMLSpanElement>("[data-attention-badge]")!;
 const appsUpdateBadge = app.querySelector<HTMLSpanElement>("[data-apps-update-badge]")!;
 const launchpadCloseButton = app.querySelector<HTMLButtonElement>("[data-launchpad-close]")!;
 const storeCloseButton = app.querySelector<HTMLButtonElement>("[data-store-close]")!;
@@ -919,6 +1032,14 @@ const agentCount = app.querySelector<HTMLSpanElement>("[data-agent-count]")!;
 const agentList = app.querySelector<HTMLDivElement>("[data-agent-list]")!;
 const agentError = app.querySelector<HTMLDivElement>("[data-agent-error]")!;
 const agentDetail = app.querySelector<HTMLElement>("[data-agent-detail]")!;
+const attentionView = app.querySelector<HTMLElement>("[data-attention-view]")!;
+const attentionCloseButton = app.querySelector<HTMLButtonElement>("[data-attention-close]")!;
+const attentionSearch = app.querySelector<HTMLInputElement>("[data-attention-search]")!;
+const attentionNotice = app.querySelector<HTMLDivElement>("[data-attention-notice]")!;
+const attentionCount = app.querySelector<HTMLSpanElement>("[data-attention-count]")!;
+const attentionList = app.querySelector<HTMLDivElement>("[data-attention-list]")!;
+const attentionError = app.querySelector<HTMLDivElement>("[data-attention-error]")!;
+const attentionDetail = app.querySelector<HTMLElement>("[data-attention-detail]")!;
 const commandOverlay = app.querySelector<HTMLElement>("[data-command-overlay]")!;
 const commandCloseButton = app.querySelector<HTMLButtonElement>("[data-command-close]")!;
 const commandSearch = app.querySelector<HTMLInputElement>("[data-command-search]")!;
@@ -948,6 +1069,8 @@ if (
   !storeOpenButton ||
   !appsOpenButton ||
   !agentsOpenButton ||
+  !attentionOpenButton ||
+  !attentionBadge ||
   !appsUpdateBadge ||
   !launchpadCloseButton ||
   !storeCloseButton ||
@@ -982,6 +1105,14 @@ if (
   !agentList ||
   !agentError ||
   !agentDetail ||
+  !attentionView ||
+  !attentionCloseButton ||
+  !attentionSearch ||
+  !attentionNotice ||
+  !attentionCount ||
+  !attentionList ||
+  !attentionError ||
+  !attentionDetail ||
   !commandOverlay ||
   !commandCloseButton ||
   !commandSearch ||
@@ -1011,7 +1142,7 @@ let resizeTimer: number | undefined;
 let terminalStatusText = "connecting";
 let terminalStatusState = "";
 let storeOpen = false;
-let activeSurface: "launchpad" | "store" | "apps" | "agents" = "launchpad";
+let activeSurface: "launchpad" | "store" | "apps" | "agents" | "attention" = "launchpad";
 let launchpadEntries: LaunchpadEntry[] = [];
 let selectedLaunchpadId: string | undefined;
 let launchpadRequestId = 0;
@@ -1037,6 +1168,12 @@ let agentDraftTask = "";
 let agentDraftPermission: AgentPermissionMode = "ask";
 let agentDraftFollowUp: AgentFollowUpMode = "queue";
 let agentDraftScope: AgentPolicyScope = "workspace";
+let agentSupervision: AgentSupervisionSnapshot = { sessions: [], adapters: [] };
+let selectedSupervisionId: string | undefined;
+let attentionRequestId = 0;
+const supervisedSessionIds = new Set<string>();
+const agentObservationBuffers = new Map<string, string>();
+const agentObservationTimers = new Map<string, number>();
 let commandOverlayOpen = false;
 let selectedCommandId: string | undefined;
 let pendingClose: "pane" | "tab" | undefined;
@@ -1050,6 +1187,7 @@ let leaderChord = readLocalPreference(leaderStorageKey) ?? "ctrl+space";
 let activeWorkspaceId: string | null = null;
 let activeWorkspaceName = "Arkonad Workspace";
 let pendingWorkspace: WorkspaceDocument | null = null;
+let targetRecoveryPaneId: string | undefined;
 let workspaceRecoveryOpen = false;
 let workspaceRestoring = false;
 let workspaceMetadataReady = false;
@@ -1160,6 +1298,7 @@ function setTopbarActionsDisabled(disabled: boolean): void {
   storeOpenButton.disabled = disabled;
   appsOpenButton.disabled = disabled;
   agentsOpenButton.disabled = disabled;
+  attentionOpenButton.disabled = disabled;
 }
 
 function renderOnboardingChoices(focusSelected = false): void {
@@ -1260,6 +1399,7 @@ function openOnboarding(): void {
   storeView.hidden = true;
   appsView.hidden = true;
   agentsView.hidden = true;
+  attentionView.hidden = true;
   storeOpen = false;
   setTopbarActionsDisabled(true);
   sessionMeta.textContent = "first run";
@@ -1382,6 +1522,7 @@ function writeToPane(sessionId: string, chunk: Uint8Array): void {
   for (const runtime of paneRuntimes.values()) {
     if (runtime.pane.session.id === sessionId) {
       runtime.terminal.write(chunk);
+      observeAgentOutput(sessionId, chunk);
       return;
     }
   }
@@ -1766,9 +1907,12 @@ function frameCommands(): FrameCommand[] {
     },
     {
       id: "attention",
-      label: "Attention",
-      description: "Review sessions that need user attention.",
-      run: () => showCommandMessage("Attention queue is ready for Managed Agent status integration."),
+      label: "Agents · Attention Queue",
+      description: "Review approvals, questions, failures, completion, and pending follow-ups.",
+      run: () => {
+        closeCommandOverlay();
+        openAttentionQueue();
+      },
     },
     {
       id: "repository",
@@ -1983,6 +2127,8 @@ function renderWorkspaceRecovery(): void {
   workspaceRestartAllButton.disabled = workspaceRestoring;
   for (const recovery of panes) {
     const row = makeElement("article", "workspace-recovery-row");
+    row.dataset.recoveryPaneId = recovery.pane.id;
+    row.classList.toggle("is-targeted", recovery.pane.id === targetRecoveryPaneId);
     const heading = makeElement("div", "workspace-recovery-row-heading");
     heading.append(
       makeElement("strong", undefined, `${recovery.tabTitle} · ${recovery.pane.session.shell}`),
@@ -2018,6 +2164,13 @@ function renderWorkspaceRecovery(): void {
     row.append(actions);
     workspaceRecoveryList.append(row);
   }
+  if (targetRecoveryPaneId) {
+    window.requestAnimationFrame(() => {
+      workspaceRecoveryList
+        .querySelector<HTMLElement>(`[data-recovery-pane-id="${targetRecoveryPaneId}"]`)
+        ?.scrollIntoView({ block: "nearest" });
+    });
+  }
 }
 
 function openWorkspaceRecovery(document: WorkspaceDocument, message: string): void {
@@ -2041,12 +2194,15 @@ function openWorkspaceRecovery(document: WorkspaceDocument, message: string): vo
   storeView.hidden = true;
   appsView.hidden = true;
   agentsView.hidden = true;
+  attentionView.hidden = true;
   commandOverlay.hidden = true;
   commandOverlayOpen = false;
   storeOpen = false;
   launchpadOpenButton.setAttribute("aria-expanded", "false");
   storeOpenButton.setAttribute("aria-expanded", "false");
   appsOpenButton.setAttribute("aria-expanded", "false");
+  agentsOpenButton.setAttribute("aria-expanded", "false");
+  attentionOpenButton.setAttribute("aria-expanded", "false");
   workspaceRecoveryMessage.textContent = message;
   renderWorkspaceRecovery();
   status.textContent = "workspace recovery";
@@ -2056,6 +2212,7 @@ function openWorkspaceRecovery(document: WorkspaceDocument, message: string): vo
 
 function closeWorkspaceRecovery(): void {
   workspaceRecoveryOpen = false;
+  targetRecoveryPaneId = undefined;
   workspaceRecovery.hidden = true;
   terminalShell.hidden = false;
   renderTerminalStatus();
@@ -2302,6 +2459,7 @@ async function saveWorkspaceNow(): Promise<void> {
     });
     activeWorkspaceId = document.id;
     activeWorkspaceName = document.name;
+    await bindSupervisedSessionsToWorkspace(document);
   })();
   try {
     await workspaceSaveInFlight;
@@ -2309,6 +2467,38 @@ async function saveWorkspaceNow(): Promise<void> {
     showError(`Could not save Workspace metadata: ${String(error)}`);
   } finally {
     workspaceSaveInFlight = undefined;
+  }
+}
+
+async function bindSupervisedSessionsToWorkspace(document: WorkspaceDocument): Promise<void> {
+  const liveRecords = agentSupervision.sessions.filter((record) => paneForSession(record.sessionId));
+  if (liveRecords.length === 0) {
+    return;
+  }
+  const rebound = await Promise.allSettled(
+    liveRecords.map((record) => {
+      const pane = paneForSession(record.sessionId);
+      const tab = pane
+        ? frameSnapshot.tabs.find((candidate) =>
+            candidate.panes.some((candidatePane) => candidatePane.id === pane.id),
+          )
+        : undefined;
+      return invoke<AgentSessionRecord>("agent_supervision_bind_workspace", {
+        request: {
+          sessionId: record.sessionId,
+          workspaceId: document.id,
+          workspaceName: document.name,
+          workspaceRoot: document.root,
+          tabId: tab?.id ?? null,
+          paneId: pane?.id ?? null,
+        },
+      });
+    }),
+  );
+  for (const result of rebound) {
+    if (result.status === "fulfilled") {
+      replaceSupervisedSession(result.value);
+    }
   }
 }
 
@@ -2989,10 +3179,12 @@ function openAgentCockpit(): void {
   storeView.hidden = true;
   appsView.hidden = true;
   agentsView.hidden = false;
+  attentionView.hidden = true;
   launchpadOpenButton.setAttribute("aria-expanded", "false");
   storeOpenButton.setAttribute("aria-expanded", "false");
   appsOpenButton.setAttribute("aria-expanded", "false");
   agentsOpenButton.setAttribute("aria-expanded", "true");
+  attentionOpenButton.setAttribute("aria-expanded", "false");
   sessionMeta.textContent = "agent cockpit";
   status.textContent = "agents";
   status.dataset.state = "ready";
@@ -3029,6 +3221,471 @@ async function startAgent(entry: AgentEntry): Promise<void> {
     },
     { kind: "currentDirectory" },
     context,
+  );
+}
+
+function agentStateLabel(state: AgentSessionState): string {
+  return {
+    starting: "Starting",
+    working: "Working",
+    waitingForInput: "Waiting for input",
+    waitingForApproval: "Waiting for approval",
+    done: "Done",
+    failed: "Failed",
+    stopped: "Stopped",
+    interrupted: "Interrupted",
+  }[state];
+}
+
+function agentStateSourceLabel(source: AgentStateSource): string {
+  return {
+    process: "process",
+    providerEvent: "declared provider event",
+    outputObservation: "uncertain output observation",
+  }[source];
+}
+
+function attentionKindLabel(kind: AttentionKind): string {
+  return {
+    approval: "Approval",
+    question: "Question",
+    failure: "Failure",
+    completion: "Completion",
+  }[kind];
+}
+
+function pendingFollowUps(record: AgentSessionRecord): AgentFollowUp[] {
+  return record.followUps.filter((followUp) => followUp.status !== "delivered");
+}
+
+function openAttentionItems(record: AgentSessionRecord): AgentAttentionItem[] {
+  return record.attention.filter((item) => !item.acknowledged);
+}
+
+function attentionSearchText(record: AgentSessionRecord): string {
+  return [
+    record.agentName,
+    record.agentId,
+    record.workspaceName,
+    record.workspaceRoot,
+    agentStateLabel(record.state),
+    record.stateDetail,
+    ...openAttentionItems(record).map((item) => `${attentionKindLabel(item.kind)} ${item.message}`),
+  ]
+    .join(" ")
+    .toLowerCase();
+}
+
+function prioritizedSupervisedSessions(): AgentSessionRecord[] {
+  const query = attentionSearch.value.trim().toLowerCase();
+  return agentSupervision.sessions
+    .filter((record) => !query || attentionSearchText(record).includes(query))
+    .sort((left, right) => {
+      const rank = (record: AgentSessionRecord) => {
+        if (openAttentionItems(record).length > 0) return 0;
+        if (pendingFollowUps(record).length > 0) return 1;
+        if (["starting", "working", "waitingForInput", "waitingForApproval"].includes(record.state)) return 2;
+        return 3;
+      };
+      return rank(left) - rank(right) || Number(right.updatedAt) - Number(left.updatedAt);
+    });
+}
+
+function updateAttentionBadge(): void {
+  const count = agentSupervision.sessions.reduce(
+    (total, record) => total + openAttentionItems(record).length,
+    0,
+  );
+  attentionBadge.hidden = count === 0;
+  attentionBadge.textContent = count === 0 ? "" : String(count);
+  attentionOpenButton.setAttribute(
+    "aria-label",
+    count === 0 ? "Attention Queue" : `Attention Queue, ${count} items`,
+  );
+}
+
+function replaceSupervisedSession(record: AgentSessionRecord): void {
+  const index = agentSupervision.sessions.findIndex((item) => item.id === record.id);
+  if (index >= 0) {
+    agentSupervision.sessions[index] = record;
+  } else {
+    agentSupervision.sessions.push(record);
+  }
+  updateAttentionBadge();
+  if (activeSurface === "attention") {
+    renderAttentionQueue();
+  }
+}
+
+function renderAttentionDetail(record: AgentSessionRecord | undefined): void {
+  attentionDetail.replaceChildren();
+  if (!record) {
+    attentionDetail.append(
+      makeElement(
+        "div",
+        "store-empty-detail",
+        "No supervised coding-agent session matches this view.",
+      ),
+    );
+    return;
+  }
+
+  const header = makeElement("header", "detail-header");
+  header.append(
+    makeElement(
+      "span",
+      "detail-category",
+      record.adapter.verified ? "enhanced adapter defined" : "native launch",
+    ),
+    makeElement("h2", "detail-title", record.agentName),
+    makeElement("p", "detail-summary", `${agentStateLabel(record.state)} · ${agentStateSourceLabel(record.stateSource)}`),
+    makeElement("p", "detail-meta", `${record.workspaceName} · ${record.workspaceRoot}`),
+  );
+  attentionDetail.append(header);
+
+  const stateSection = appendDetailSection(attentionDetail, "Observed state");
+  appendDetailLine(stateSection, "State", agentStateLabel(record.state));
+  appendDetailLine(stateSection, "Evidence", agentStateSourceLabel(record.stateSource));
+  appendDetailLine(stateSection, "Detail", record.stateDetail);
+  stateSection.append(
+    makeElement(
+      "p",
+      "agent-policy-help",
+      "Arkonad does not calculate completion percentages or treat process silence as completed work.",
+    ),
+  );
+
+  const contextSection = appendDetailSection(attentionDetail, "Exact session context");
+  appendDetailLine(contextSection, "Workspace", record.workspaceName);
+  appendDetailLine(contextSection, "Tab", record.tabId ?? "not recorded");
+  appendDetailLine(contextSection, "Pane", record.paneId ?? "not recorded");
+  appendDetailLine(contextSection, "Session", record.sessionId);
+  const returnButton = makeElement("button", "detail-action", "Return to exact session") as HTMLButtonElement;
+  returnButton.type = "button";
+  returnButton.addEventListener("click", () => {
+    void returnToSupervisedSession(record).catch((error: unknown) => {
+      attentionNotice.textContent = `Could not return to the saved session: ${String(error)}`;
+    });
+  });
+  contextSection.append(returnButton);
+
+  const adapterSection = appendDetailSection(attentionDetail, "Provider limits");
+  appendDetailLine(
+    adapterSection,
+    "Adapter definition",
+    record.adapter.verified ? "included for the first integration" : "native launch only",
+  );
+  appendDetailLine(
+    adapterSection,
+    "Declared events",
+    record.adapter.declaredEventSource ?? "not available",
+  );
+  appendDetailLine(
+    adapterSection,
+    "Steer",
+    record.adapter.supportsSteer && record.enhancedEventsActive
+      ? "active for this session"
+      : record.adapter.supportsSteer
+        ? "adapter supports it; this native session queues"
+        : "queues instead",
+  );
+  adapterSection.append(makeElement("p", "detail-note", record.adapter.nativeTuiNote));
+
+  const attentionSection = appendDetailSection(attentionDetail, "Needs attention");
+  const items = openAttentionItems(record);
+  if (items.length === 0) {
+    attentionSection.append(makeElement("p", "detail-empty", "No unacknowledged attention items."));
+  } else {
+    for (const item of items) {
+      const itemView = makeElement("div", `attention-item attention-${item.kind}`);
+      itemView.append(
+        makeElement("strong", undefined, attentionKindLabel(item.kind)),
+        makeElement("span", "attention-item-source", agentStateSourceLabel(item.source)),
+        makeElement("p", undefined, item.message),
+      );
+      const acknowledge = makeElement("button", "detail-action", "Acknowledge") as HTMLButtonElement;
+      acknowledge.type = "button";
+      acknowledge.addEventListener("click", () => void acknowledgeAttention(item.id));
+      itemView.append(acknowledge);
+      attentionSection.append(itemView);
+    }
+  }
+
+  const followUpSection = appendDetailSection(attentionDetail, "Follow-ups");
+  if (record.followUps.length === 0) {
+    followUpSection.append(makeElement("p", "detail-empty", "No follow-ups have been submitted."));
+  } else {
+    for (const followUp of record.followUps) {
+      const row = makeElement("div", "follow-up-item");
+      row.append(
+        makeElement("strong", undefined, `${agentFollowUpLabel(followUp.effectiveMode)} · ${followUp.status}`),
+        makeElement("p", undefined, followUp.message),
+        makeElement("span", "attention-item-source", followUp.statusMessage),
+      );
+      if (followUp.status === "queued") {
+        const deliver = makeElement("button", "detail-action", "Deliver queued follow-up") as HTMLButtonElement;
+        deliver.type = "button";
+        deliver.addEventListener("click", () => void deliverAgentFollowUp(followUp.id));
+        row.append(deliver);
+      }
+      followUpSection.append(row);
+    }
+  }
+
+  const form = makeElement("form", "agent-task-form") as HTMLFormElement;
+  const messageLabel = makeElement("label", "agent-task-field");
+  messageLabel.append(makeElement("span", undefined, "Follow-up message"));
+  const message = makeElement("textarea") as HTMLTextAreaElement;
+  message.rows = 3;
+  message.required = true;
+  message.placeholder = "Add context or redirect the active task";
+  messageLabel.append(message);
+  const modeLabel = makeElement("label", "agent-scope-field");
+  modeLabel.append(makeElement("span", undefined, "Delivery"));
+  const mode = makeElement("select", "agent-scope-select") as HTMLSelectElement;
+  mode.innerHTML = `
+    <option value="queue">Queue after current turn</option>
+    <option value="steer">Steer active turn when verified</option>
+  `;
+  mode.value = record.followUpMode;
+  modeLabel.append(mode);
+  const submit = makeElement("button", "agent-start-button", "Submit follow-up") as HTMLButtonElement;
+  submit.type = "submit";
+  form.append(messageLabel, modeLabel, submit);
+  form.addEventListener("submit", (event) => {
+    event.preventDefault();
+    void submitAgentFollowUp(record.id, message.value, mode.value === "steer" ? "steer" : "queue");
+  });
+  followUpSection.append(form);
+}
+
+function renderAttentionQueue(): void {
+  const records = prioritizedSupervisedSessions();
+  attentionList.replaceChildren();
+  const openCount = agentSupervision.sessions.reduce(
+    (total, record) => total + openAttentionItems(record).length,
+    0,
+  );
+  attentionCount.textContent = `${openCount} attention · ${records.length} sessions`;
+  updateAttentionBadge();
+  if (records.length === 0) {
+    selectedSupervisionId = undefined;
+    attentionList.append(makeElement("div", "store-empty-list", "No supervised sessions match this search."));
+    renderAttentionDetail(undefined);
+    return;
+  }
+  if (!records.some((record) => record.id === selectedSupervisionId)) {
+    selectedSupervisionId = records[0].id;
+  }
+  for (const record of records) {
+    const selected = record.id === selectedSupervisionId;
+    const row = makeElement("button", "store-row") as HTMLButtonElement;
+    row.type = "button";
+    row.dataset.supervisionId = record.id;
+    row.setAttribute("role", "option");
+    row.setAttribute("aria-selected", String(selected));
+    row.classList.toggle("is-selected", selected);
+    const top = makeElement("span", "store-row-top");
+    top.append(
+      makeElement("strong", undefined, record.agentName),
+      makeElement("span", "store-row-category", record.workspaceName),
+    );
+    const openItems = openAttentionItems(record);
+    const pending = pendingFollowUps(record);
+    row.append(
+      top,
+      makeElement("span", "store-row-summary", `${agentStateLabel(record.state)} · ${agentStateSourceLabel(record.stateSource)}`),
+      makeElement(
+        "span",
+        `store-row-state ${openItems.length > 0 ? "status-warning" : record.state === "failed" ? "status-error" : "status-active"}`,
+        openItems.length > 0
+          ? `${openItems.length} attention`
+          : pending.length > 0
+            ? `${pending.length} queued`
+            : agentStateLabel(record.state),
+      ),
+    );
+    row.addEventListener("click", () => selectSupervisedSession(record.id));
+    attentionList.append(row);
+  }
+  renderAttentionDetail(records.find((record) => record.id === selectedSupervisionId));
+}
+
+function selectSupervisedSession(id: string, focusRow = false): void {
+  if (!agentSupervision.sessions.some((record) => record.id === id)) {
+    return;
+  }
+  selectedSupervisionId = id;
+  renderAttentionQueue();
+  if (focusRow) {
+    window.requestAnimationFrame(() => {
+      attentionList.querySelector<HTMLButtonElement>(`[data-supervision-id="${id}"]`)?.focus();
+    });
+  }
+}
+
+function moveAttentionSelection(offset: number): void {
+  const records = prioritizedSupervisedSessions();
+  if (records.length === 0) {
+    return;
+  }
+  const currentIndex = Math.max(0, records.findIndex((record) => record.id === selectedSupervisionId));
+  selectSupervisedSession(records[(currentIndex + offset + records.length) % records.length].id, true);
+}
+
+async function refreshAgentSupervision(): Promise<void> {
+  const requestId = ++attentionRequestId;
+  try {
+    const snapshot = await invoke<AgentSupervisionSnapshot>("agent_supervision_snapshot");
+    if (requestId !== attentionRequestId) {
+      return;
+    }
+    agentSupervision = snapshot;
+    supervisedSessionIds.clear();
+    for (const record of snapshot.sessions) {
+      if (paneForSession(record.sessionId)) {
+        supervisedSessionIds.add(record.sessionId);
+      }
+    }
+    attentionError.hidden = true;
+    attentionNotice.textContent =
+      "Every state names process, declared provider event, or uncertain output observation as its source.";
+    renderAttentionQueue();
+  } catch (error) {
+    if (requestId !== attentionRequestId) {
+      return;
+    }
+    attentionError.hidden = false;
+    attentionError.textContent = `Could not read supervised agents: ${String(error)}`;
+  }
+}
+
+function openAttentionQueue(): void {
+  if (storeOpen && activeSurface === "attention") {
+    attentionSearch.focus();
+    return;
+  }
+  storeOpen = true;
+  activeSurface = "attention";
+  terminalShell.hidden = true;
+  launchpadView.hidden = true;
+  storeView.hidden = true;
+  appsView.hidden = true;
+  agentsView.hidden = true;
+  attentionView.hidden = false;
+  launchpadOpenButton.setAttribute("aria-expanded", "false");
+  storeOpenButton.setAttribute("aria-expanded", "false");
+  appsOpenButton.setAttribute("aria-expanded", "false");
+  agentsOpenButton.setAttribute("aria-expanded", "false");
+  attentionOpenButton.setAttribute("aria-expanded", "true");
+  sessionMeta.textContent = "attention queue";
+  status.textContent = "attention";
+  status.dataset.state = "ready";
+  void refreshAgentSupervision();
+  window.requestAnimationFrame(() => attentionSearch.focus());
+}
+
+async function returnToSupervisedSession(record: AgentSessionRecord): Promise<void> {
+  const currentPane = paneForSession(record.sessionId);
+  if (currentPane) {
+    const tab = frameSnapshot.tabs.find((candidate) =>
+      candidate.panes.some((pane) => pane.id === currentPane.id),
+    );
+    if (tab && frameSnapshot.activeTabId !== tab.id) {
+      renderFrame(await invoke<FrameSnapshot>("frame_activate_tab", { tabId: tab.id }), false);
+    }
+    if (frameSnapshot.focusedPaneId !== currentPane.id) {
+      renderFrame(await invoke<FrameSnapshot>("frame_focus_pane", { paneId: currentPane.id }), false);
+    }
+    closeSurface();
+    paneRuntimes.get(currentPane.id)?.terminal.focus();
+    return;
+  }
+  if (!record.workspaceId) {
+    attentionNotice.textContent =
+      "The original live pane is unavailable and this session has no saved Workspace id.";
+    return;
+  }
+  const result = await invoke<WorkspaceLoadResult>("workspace_load", { workspaceId: record.workspaceId });
+  if (result.status === "ready" && result.workspace) {
+    targetRecoveryPaneId = record.paneId ?? undefined;
+    openWorkspaceRecovery(
+      result.workspace,
+      `Returning to ${record.agentName}. The provider process is Interrupted and will not be replayed; inspect the saved pane and restart the agent explicitly.`,
+    );
+    return;
+  }
+  attentionNotice.textContent = result.message;
+}
+
+async function acknowledgeAttention(attentionId: string): Promise<void> {
+  try {
+    agentSupervision = await invoke<AgentSupervisionSnapshot>("agent_attention_acknowledge", {
+      attentionId,
+    });
+    renderAttentionQueue();
+  } catch (error) {
+    attentionNotice.textContent = `Could not acknowledge the item: ${String(error)}`;
+  }
+}
+
+async function submitAgentFollowUp(
+  supervisionId: string,
+  message: string,
+  mode: AgentFollowUpMode,
+): Promise<void> {
+  try {
+    const result = await invoke<AgentFollowUpResult>("agent_follow_up_submit", {
+      request: { supervisionId, message, mode },
+    });
+    replaceSupervisedSession(result.session);
+    attentionNotice.textContent = result.followUp.statusMessage;
+  } catch (error) {
+    attentionNotice.textContent = `Could not submit the follow-up: ${String(error)}`;
+  }
+}
+
+async function deliverAgentFollowUp(followUpId: string): Promise<void> {
+  try {
+    const result = await invoke<AgentFollowUpResult>("agent_follow_up_deliver", { followUpId });
+    replaceSupervisedSession(result.session);
+    attentionNotice.textContent = result.followUp.statusMessage;
+  } catch (error) {
+    attentionNotice.textContent = `Could not deliver the queued follow-up: ${String(error)}`;
+  }
+}
+
+function observeAgentOutput(sessionId: string, chunk: Uint8Array): void {
+  if (!supervisedSessionIds.has(sessionId)) {
+    return;
+  }
+  const text = new TextDecoder().decode(chunk);
+  agentObservationBuffers.set(
+    sessionId,
+    `${agentObservationBuffers.get(sessionId) ?? ""}${text}`.slice(-8_000),
+  );
+  const existing = agentObservationTimers.get(sessionId);
+  if (existing !== undefined) {
+    window.clearTimeout(existing);
+  }
+  agentObservationTimers.set(
+    sessionId,
+    window.setTimeout(() => {
+      agentObservationTimers.delete(sessionId);
+      const observation = agentObservationBuffers.get(sessionId) ?? "";
+      agentObservationBuffers.delete(sessionId);
+      void invoke<AgentSessionRecord | null>("agent_supervision_observe_output", {
+        request: { sessionId, text: observation },
+      })
+        .then((record) => {
+          if (record) {
+            replaceSupervisedSession(record);
+          }
+        })
+        .catch(() => {
+          // Terminal output remains visible even if supervision metadata cannot be updated.
+        });
+    }, 180),
   );
 }
 
@@ -3123,6 +3780,35 @@ async function launchTarget(
       session: nextSession,
     });
     renderFrame(nextSnapshot);
+    let supervisionWarning = "";
+    if (context) {
+      try {
+        await saveWorkspaceNow();
+        const pane = paneForSession(nextSession.id);
+        const tab = pane
+          ? frameSnapshot.tabs.find((candidate) =>
+              candidate.panes.some((candidatePane) => candidatePane.id === pane.id),
+            )
+          : undefined;
+        agentSupervision = await invoke<AgentSupervisionSnapshot>("agent_supervision_register", {
+          request: {
+            sessionId: nextSession.id,
+            workspaceId: activeWorkspaceId,
+            workspaceName: activeWorkspaceName,
+            workspaceRoot: context.workspaceRoot ?? nextSession.cwd,
+            tabId: tab?.id ?? null,
+            paneId: pane?.id ?? null,
+            agentId: target.id,
+            agentName: target.name,
+            followUpMode: context.policy.followUp,
+          },
+        });
+        supervisedSessionIds.add(nextSession.id);
+        updateAttentionBadge();
+      } catch (error) {
+        supervisionWarning = `Agent launched, but supervision is unavailable: ${String(error)}`;
+      }
+    }
     sessionAccepted = true;
     for (const chunk of pendingOutput) {
       writeToPane(nextSession.id, chunk);
@@ -3142,11 +3828,14 @@ async function launchTarget(
     launchBusy = false;
     closeSurface();
     sessionMeta.textContent = `${target.name} · ${nextSession.shell}`;
-    setTerminalStatus("ready", "ready");
+    setTerminalStatus(supervisionWarning || "ready", supervisionWarning ? "error" : "ready");
     sendResize();
     paneRuntimes.get(frameSnapshot.focusedPaneId ?? "")?.terminal.focus();
     void refreshLaunchpad();
     void refreshMyApps();
+    if (context) {
+      void refreshAgentSupervision();
+    }
   } catch (error) {
     launchBusy = false;
     const message = `Could not launch ${target.name}: ${String(error)}`;
@@ -3929,10 +4618,12 @@ function openLaunchpad(): void {
   storeView.hidden = true;
   appsView.hidden = true;
   agentsView.hidden = true;
+  attentionView.hidden = true;
   launchpadOpenButton.setAttribute("aria-expanded", "true");
   storeOpenButton.setAttribute("aria-expanded", "false");
   appsOpenButton.setAttribute("aria-expanded", "false");
   agentsOpenButton.setAttribute("aria-expanded", "false");
+  attentionOpenButton.setAttribute("aria-expanded", "false");
   sessionMeta.textContent = "launchpad";
   status.textContent = "launchpad";
   status.dataset.state = "ready";
@@ -4656,10 +5347,12 @@ function openStore(category?: CatalogCategory | "", focusId?: string): void {
   appsView.hidden = true;
   storeView.hidden = false;
   agentsView.hidden = true;
+  attentionView.hidden = true;
   launchpadOpenButton.setAttribute("aria-expanded", "false");
   storeOpenButton.setAttribute("aria-expanded", "true");
   appsOpenButton.setAttribute("aria-expanded", "false");
   agentsOpenButton.setAttribute("aria-expanded", "false");
+  attentionOpenButton.setAttribute("aria-expanded", "false");
   sessionMeta.textContent = "store browser";
   status.textContent = "store";
   status.dataset.state = "ready";
@@ -4680,10 +5373,12 @@ function openMyApps(): void {
   storeView.hidden = true;
   appsView.hidden = false;
   agentsView.hidden = true;
+  attentionView.hidden = true;
   launchpadOpenButton.setAttribute("aria-expanded", "false");
   storeOpenButton.setAttribute("aria-expanded", "false");
   appsOpenButton.setAttribute("aria-expanded", "true");
   agentsOpenButton.setAttribute("aria-expanded", "false");
+  attentionOpenButton.setAttribute("aria-expanded", "false");
   sessionMeta.textContent = "my apps";
   status.textContent = "my apps";
   status.dataset.state = "ready";
@@ -4705,11 +5400,13 @@ function closeSurface(): void {
   storeView.hidden = true;
   appsView.hidden = true;
   agentsView.hidden = true;
+  attentionView.hidden = true;
   terminalShell.hidden = false;
   launchpadOpenButton.setAttribute("aria-expanded", "false");
   storeOpenButton.setAttribute("aria-expanded", "false");
   appsOpenButton.setAttribute("aria-expanded", "false");
   agentsOpenButton.setAttribute("aria-expanded", "false");
+  attentionOpenButton.setAttribute("aria-expanded", "false");
   updateFocusedSession();
   renderTerminalStatus();
   sendResize();
@@ -4727,10 +5424,12 @@ launchpadOpenButton.addEventListener("click", openLaunchpad);
 storeOpenButton.addEventListener("click", () => openStore());
 appsOpenButton.addEventListener("click", openMyApps);
 agentsOpenButton.addEventListener("click", openAgentCockpit);
+attentionOpenButton.addEventListener("click", openAttentionQueue);
 launchpadCloseButton.addEventListener("click", closeSurface);
 storeCloseButton.addEventListener("click", closeSurface);
 appsCloseButton.addEventListener("click", closeSurface);
 agentsCloseButton.addEventListener("click", closeSurface);
+attentionCloseButton.addEventListener("click", closeSurface);
 commandCloseButton.addEventListener("click", closeCommandOverlay);
 commandSearch.addEventListener("input", renderCommandList);
 commandSearch.addEventListener("keydown", (event) => {
@@ -4794,6 +5493,7 @@ storeList.addEventListener("keydown", (event) => {
 });
 appsSearch.addEventListener("input", scheduleMyAppsRefresh);
 agentSearch.addEventListener("input", scheduleAgentRefresh);
+attentionSearch.addEventListener("input", renderAttentionQueue);
 launchpadList.addEventListener("keydown", (event) => {
   if (event.key === "ArrowDown") {
     event.preventDefault();
@@ -4890,6 +5590,33 @@ agentList.addEventListener("keydown", (event) => {
     }
   }
 });
+attentionList.addEventListener("keydown", (event) => {
+  if (event.key === "ArrowDown") {
+    event.preventDefault();
+    moveAttentionSelection(1);
+  } else if (event.key === "ArrowUp") {
+    event.preventDefault();
+    moveAttentionSelection(-1);
+  } else if (event.key === "Home") {
+    event.preventDefault();
+    const first = prioritizedSupervisedSessions()[0];
+    if (first) {
+      selectSupervisedSession(first.id, true);
+    }
+  } else if (event.key === "End") {
+    event.preventDefault();
+    const last = prioritizedSupervisedSessions().at(-1);
+    if (last) {
+      selectSupervisedSession(last.id, true);
+    }
+  } else if (event.key === "Enter") {
+    event.preventDefault();
+    const activeRow = event.target instanceof HTMLButtonElement ? event.target : undefined;
+    if (activeRow?.dataset.supervisionId) {
+      selectSupervisedSession(activeRow.dataset.supervisionId, true);
+    }
+  }
+});
 
 workspaceRestartAllButton.addEventListener("click", () => void restoreWorkspace());
 workspaceOpenShellButton.addEventListener("click", () => void discardWorkspaceAndOpenShell());
@@ -4965,6 +5692,18 @@ window.addEventListener("beforeunload", () => {
 });
 
 void listen<SessionExited>("session-exited", (event) => {
+  supervisedSessionIds.delete(event.payload.id);
+  void invoke<AgentSessionRecord | null>("agent_supervision_process_exited", {
+    sessionId: event.payload.id,
+  })
+    .then((record) => {
+      if (record) {
+        replaceSupervisedSession(record);
+      }
+    })
+    .catch(() => {
+      // The terminal exit remains visible even if supervision metadata cannot be updated.
+    });
   if (!paneForSession(event.payload.id)) {
     return;
   }
@@ -5047,6 +5786,7 @@ async function startSession(preferredCwd: string | null = null): Promise<void> {
 }
 
 leaderHint.textContent = `Leader ${leaderLabel()}`;
+void refreshAgentSupervision();
 if (readLocalPreference(onboardingCompletedStorageKey) === "true") {
   openStartupBehavior();
 } else {
