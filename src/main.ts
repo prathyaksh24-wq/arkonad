@@ -394,6 +394,98 @@ type ManagementPlan = {
   manualInstructions: string | null;
 };
 
+type StartupBehavior = "terminal" | "store" | "apps" | "launchpad" | "lastWorkspace";
+type OnboardingChoiceId = "terminal" | "store" | "apps" | "agent" | "restore";
+
+type OnboardingChoice = {
+  id: OnboardingChoiceId;
+  label: string;
+  description: string;
+  detail: string;
+};
+
+const onboardingChoices: OnboardingChoice[] = [
+  {
+    id: "terminal",
+    label: "Open Terminal",
+    description: "Start a blank shell session in the current directory.",
+    detail: "Nothing is installed or connected.",
+  },
+  {
+    id: "store",
+    label: "Browse Store",
+    description: "Explore Catalog Tools before deciding whether to install one.",
+    detail: "Install review starts only after you choose a tool.",
+  },
+  {
+    id: "apps",
+    label: "My Apps",
+    description: "See tools Arkonad can already detect or launch.",
+    detail: "Existing installations remain under their own ownership.",
+  },
+  {
+    id: "agent",
+    label: "Use a Coding Agent",
+    description: "Browse coding agents that can run in an Arkonad Session.",
+    detail: "Sign-in and agent permissions stay inside the selected tool.",
+  },
+  {
+    id: "restore",
+    label: "Restore Workspace",
+    description: "Open the last saved Workspace location when one is available.",
+    detail: "If there is no saved location, Arkonad opens a blank shell.",
+  },
+];
+
+const startupBehaviorOptions: Array<{ value: StartupBehavior; label: string }> = [
+  { value: "terminal", label: "Terminal" },
+  { value: "store", label: "Store" },
+  { value: "apps", label: "My Apps" },
+  { value: "launchpad", label: "Launchpad" },
+  { value: "lastWorkspace", label: "Last Workspace" },
+];
+
+const onboardingCompletedStorageKey = "arkonad.onboarding.completed";
+const startupBehaviorStorageKey = "arkonad.startup.behavior";
+const lastWorkspaceStorageKey = "arkonad.workspace.last-path";
+
+function readLocalPreference(key: string): string | null {
+  try {
+    return localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
+function writeLocalPreference(key: string, value: string | null): void {
+  try {
+    if (value === null) {
+      localStorage.removeItem(key);
+    } else {
+      localStorage.setItem(key, value);
+    }
+  } catch {
+    // A storage failure should not prevent a user from opening the terminal.
+  }
+}
+
+function parseStartupBehavior(value: string | null): StartupBehavior {
+  switch (value) {
+    case "store":
+    case "apps":
+    case "launchpad":
+    case "lastWorkspace":
+    case "terminal":
+      return value;
+    default:
+      return "terminal";
+  }
+}
+
+function startupBehaviorLabel(value: StartupBehavior): string {
+  return startupBehaviorOptions.find((option) => option.value === value)?.label ?? "Terminal";
+}
+
 const app = document.querySelector<HTMLDivElement>("#app");
 
 if (!app) {
@@ -418,6 +510,61 @@ app.innerHTML = `
       <div class="status" data-status>connecting</div>
     </header>
     <main class="workspace">
+      <section
+        class="onboarding-screen"
+        data-onboarding
+        hidden
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="onboarding-title"
+        aria-describedby="onboarding-description"
+      >
+        <div class="onboarding-card">
+          <header class="onboarding-heading">
+            <span class="store-eyebrow">FIRST RUN · ONBOARDING</span>
+            <h1 id="onboarding-title">Choose how to start Arkonad</h1>
+            <p id="onboarding-description">
+              Arkonad hosts terminal apps in Sessions. Nothing is installed, signed in, or connected during this step.
+            </p>
+          </header>
+          <div class="onboarding-content">
+            <section class="onboarding-choice-panel" aria-labelledby="onboarding-choice-heading">
+              <div class="onboarding-panel-heading">
+                <span id="onboarding-choice-heading">Start here</span>
+                <span class="onboarding-panel-hint">↑↓ choose · Enter open</span>
+              </div>
+              <div
+                class="onboarding-options"
+                data-onboarding-options
+                role="listbox"
+                aria-label="First-run choices"
+              ></div>
+            </section>
+            <section class="onboarding-preferences" aria-labelledby="onboarding-preferences-heading">
+              <span class="store-eyebrow" id="onboarding-preferences-heading">NEXT TIME</span>
+              <label class="onboarding-select-control">
+                <span>When Arkonad opens again</span>
+                <select data-onboarding-startup aria-label="Startup behavior">
+                  <option value="terminal">Terminal · blank shell</option>
+                  <option value="store">Store</option>
+                  <option value="apps">My Apps</option>
+                  <option value="launchpad">Launchpad</option>
+                  <option value="lastWorkspace">Last Workspace</option>
+                </select>
+              </label>
+              <p class="onboarding-note">
+                You can change this later from Leader → Settings. Last Workspace uses the most recent saved Session location.
+              </p>
+              <p class="onboarding-message" data-onboarding-message aria-live="polite"></p>
+            </section>
+          </div>
+          <footer class="onboarding-footer">
+            <span>Enter open</span>
+            <span>Esc terminal</span>
+            <span>Plain-language help is on this screen</span>
+          </footer>
+        </div>
+      </section>
       <section class="terminal-shell" data-terminal-shell>
         <div class="frame-tabs" data-frame-tabs role="tablist" aria-label="Arkonad sessions"></div>
         <div class="frame-layout" data-frame-layout aria-label="Arkonad workspace"></div>
@@ -592,6 +739,10 @@ app.innerHTML = `
 `;
 
 const terminalShell = app.querySelector<HTMLElement>("[data-terminal-shell]")!;
+const onboardingScreen = app.querySelector<HTMLElement>("[data-onboarding]")!;
+const onboardingOptions = app.querySelector<HTMLDivElement>("[data-onboarding-options]")!;
+const onboardingStartup = app.querySelector<HTMLSelectElement>("[data-onboarding-startup]")!;
+const onboardingMessage = app.querySelector<HTMLParagraphElement>("[data-onboarding-message]")!;
 const frameTabs = app.querySelector<HTMLDivElement>("[data-frame-tabs]")!;
 const frameLayout = app.querySelector<HTMLDivElement>("[data-frame-layout]")!;
 const sessionMeta = app.querySelector<HTMLDivElement>("[data-session-meta]")!;
@@ -642,6 +793,10 @@ const leaderHint = app.querySelector<HTMLSpanElement>("[data-leader-hint]")!;
 
 if (
   !terminalShell ||
+  !onboardingScreen ||
+  !onboardingOptions ||
+  !onboardingStartup ||
+  !onboardingMessage ||
   !frameTabs ||
   !frameLayout ||
   !sessionMeta ||
@@ -732,8 +887,13 @@ let launchBusy = false;
 let commandOverlayOpen = false;
 let selectedCommandId: string | undefined;
 let pendingClose: "pane" | "tab" | undefined;
+let onboardingOpen = false;
+let selectedOnboardingChoice: OnboardingChoiceId = "terminal";
+let startupBehavior = parseStartupBehavior(readLocalPreference(startupBehaviorStorageKey));
+let terminalStarted = false;
+let terminalStartPromise: Promise<void> | undefined;
 const leaderStorageKey = "arkonad.leader-chord";
-let leaderChord = localStorage.getItem(leaderStorageKey) ?? "ctrl+space";
+let leaderChord = readLocalPreference(leaderStorageKey) ?? "ctrl+space";
 let activeWorkspaceId: string | null = null;
 let activeWorkspaceName = "Arkonad Workspace";
 let pendingWorkspace: WorkspaceDocument | null = null;
@@ -786,6 +946,7 @@ function updateFocusedSession(): void {
   session = focusedPane()?.session;
   sessionMeta.textContent = session?.shell ?? "no active session";
   cwdLabel.textContent = session?.cwd ?? "";
+  rememberLastWorkspace(session?.cwd);
 }
 
 function sendResizeForPane(runtime: PaneRuntime): void {
@@ -826,6 +987,151 @@ function makeElement<K extends keyof HTMLElementTagNameMap>(
     element.textContent = text;
   }
   return element;
+}
+
+function rememberLastWorkspace(path: string | undefined): void {
+  const normalizedPath = path?.trim();
+  if (normalizedPath) {
+    writeLocalPreference(lastWorkspaceStorageKey, normalizedPath);
+  }
+}
+
+function lastWorkspacePath(): string | null {
+  return readLocalPreference(lastWorkspaceStorageKey)?.trim() || null;
+}
+
+function setTopbarActionsDisabled(disabled: boolean): void {
+  launchpadOpenButton.disabled = disabled;
+  storeOpenButton.disabled = disabled;
+  appsOpenButton.disabled = disabled;
+}
+
+function renderOnboardingChoices(focusSelected = false): void {
+  onboardingOptions.replaceChildren();
+  for (const choice of onboardingChoices) {
+    const selected = choice.id === selectedOnboardingChoice;
+    const button = makeElement("button", "onboarding-option") as HTMLButtonElement;
+    button.type = "button";
+    button.id = `onboarding-option-${choice.id}`;
+    button.role = "option";
+    button.ariaSelected = selected ? "true" : "false";
+    button.tabIndex = selected ? 0 : -1;
+    const key = makeElement("span", "onboarding-option-key", String(onboardingChoices.indexOf(choice) + 1));
+    const copy = makeElement("span", "onboarding-option-copy");
+    copy.append(
+      makeElement("strong", "onboarding-option-label", choice.label),
+      makeElement("span", "onboarding-option-description", choice.description),
+      makeElement("span", "onboarding-option-detail", choice.detail),
+    );
+    button.append(key, copy);
+    button.addEventListener("click", () => {
+      selectedOnboardingChoice = choice.id;
+      renderOnboardingChoices(true);
+    });
+    onboardingOptions.append(button);
+  }
+
+  onboardingOptions.setAttribute(
+    "aria-activedescendant",
+    `onboarding-option-${selectedOnboardingChoice}`,
+  );
+  if (focusSelected) {
+    window.requestAnimationFrame(() => {
+      onboardingOptions
+        .querySelector<HTMLButtonElement>(`#onboarding-option-${selectedOnboardingChoice}`)
+        ?.focus();
+    });
+  }
+}
+
+function moveOnboardingSelection(offset: number): void {
+  const currentIndex = onboardingChoices.findIndex(
+    (choice) => choice.id === selectedOnboardingChoice,
+  );
+  const nextIndex = (Math.max(currentIndex, 0) + offset + onboardingChoices.length) % onboardingChoices.length;
+  selectedOnboardingChoice = onboardingChoices[nextIndex].id;
+  renderOnboardingChoices(true);
+}
+
+function saveOnboardingPreferences(): void {
+  startupBehavior = parseStartupBehavior(onboardingStartup.value);
+  writeLocalPreference(startupBehaviorStorageKey, startupBehavior);
+  writeLocalPreference(onboardingCompletedStorageKey, "true");
+}
+
+function closeOnboarding(): void {
+  onboardingOpen = false;
+  onboardingScreen.hidden = true;
+  setTopbarActionsDisabled(false);
+  onboardingMessage.textContent = "";
+}
+
+function refreshWorkspaceMetadata(): void {
+  void refreshLaunchpad();
+  void refreshMyApps();
+}
+
+function completeOnboarding(choiceId: OnboardingChoiceId): void {
+  selectedOnboardingChoice = choiceId;
+  saveOnboardingPreferences();
+  closeOnboarding();
+  refreshWorkspaceMetadata();
+
+  switch (choiceId) {
+    case "store":
+      openStore("");
+      break;
+    case "apps":
+      openMyApps();
+      break;
+    case "agent":
+      openStore("agent");
+      break;
+    case "restore":
+      void loadWorkspaceOnStartup();
+      break;
+    default:
+      void startSession();
+      break;
+  }
+}
+
+function openOnboarding(): void {
+  onboardingOpen = true;
+  onboardingScreen.hidden = false;
+  terminalShell.hidden = true;
+  launchpadView.hidden = true;
+  storeView.hidden = true;
+  appsView.hidden = true;
+  storeOpen = false;
+  setTopbarActionsDisabled(true);
+  sessionMeta.textContent = "first run";
+  status.textContent = "onboarding";
+  status.dataset.state = "ready";
+  onboardingStartup.value = startupBehavior;
+  selectedOnboardingChoice = "terminal";
+  renderOnboardingChoices(true);
+}
+
+function openStartupBehavior(): void {
+  refreshWorkspaceMetadata();
+  switch (startupBehavior) {
+    case "store":
+      openStore();
+      break;
+    case "apps":
+      openMyApps();
+      break;
+    case "launchpad":
+      openLaunchpad();
+      break;
+    case "lastWorkspace":
+      void loadWorkspaceOnStartup();
+      break;
+    default:
+      void startSession();
+      break;
+  }
 }
 
 function createPaneRuntime(pane: FramePane): PaneRuntime {
@@ -1092,13 +1398,44 @@ function showSettings(): void {
   save.type = "button";
   save.addEventListener("click", () => {
     leaderChord = normalizedLeader(input.value);
-    localStorage.setItem(leaderStorageKey, leaderChord);
+    writeLocalPreference(leaderStorageKey, leaderChord);
     leaderHint.textContent = `Leader ${leaderLabel()}`;
     showCommandMessage(`Leader saved as ${leaderLabel()}.`);
     scheduleWorkspaceSave();
   });
   row.append(input, save);
-  commandMessage.append(title, description, row);
+
+  const startupTitle = makeElement(
+    "strong",
+    "command-message-title",
+    "Startup behavior",
+  );
+  const startupDescription = makeElement(
+    "p",
+    "command-message-description",
+    "Choose the surface Arkonad opens next time. Last Workspace uses the most recent saved Session location.",
+  );
+  const startupRow = makeElement("div", "command-settings-row");
+  const startupLabel = makeElement("label", "command-settings-field");
+  startupLabel.append(makeElement("span", undefined, "Open on startup"));
+  const startupSelect = makeElement("select", "command-settings-input") as HTMLSelectElement;
+  startupSelect.setAttribute("aria-label", "Startup behavior");
+  for (const option of startupBehaviorOptions) {
+    const element = makeElement("option") as HTMLOptionElement;
+    element.value = option.value;
+    element.textContent = option.label;
+    element.selected = option.value === startupBehavior;
+    startupSelect.append(element);
+  }
+  startupSelect.addEventListener("change", () => {
+    startupBehavior = parseStartupBehavior(startupSelect.value);
+    writeLocalPreference(startupBehaviorStorageKey, startupBehavior);
+    showCommandMessage(`Startup behavior saved as ${startupBehaviorLabel(startupBehavior)}.`);
+  });
+  startupLabel.append(startupSelect);
+  startupRow.append(startupLabel);
+
+  commandMessage.append(title, description, row, startupTitle, startupDescription, startupRow);
   input.focus();
   input.select();
 }
@@ -1267,7 +1604,7 @@ function frameCommands(): FrameCommand[] {
     {
       id: "settings",
       label: "Settings",
-      description: "Change the configurable Leader chord.",
+      description: "Change the Leader chord and startup behavior.",
       run: showSettings,
     },
   ];
@@ -1562,7 +1899,7 @@ async function discardWorkspaceAndOpenShell(): Promise<void> {
       showError(`Could not clear the interrupted Workspace: ${String(error)}`);
     }
   }
-  await startSession();
+  await startSession(lastWorkspacePath());
 }
 
 async function createFrameSessionWithRequest(
@@ -3618,8 +3955,15 @@ function scheduleStoreRefresh(): void {
   storeRefreshTimer = window.setTimeout(() => void refreshStore(), 140);
 }
 
-function openStore(): void {
+function openStore(category?: CatalogCategory | ""): void {
+  if (category !== undefined) {
+    storeCategory.value = category;
+  }
+
   if (storeOpen && activeSurface === "store") {
+    if (category !== undefined) {
+      void refreshStore();
+    }
     storeSearch.focus();
     return;
   }
@@ -3664,6 +4008,9 @@ function openMyApps(): void {
 
 function closeSurface(): void {
   if (!storeOpen) {
+    if (!terminalStarted && !terminalStartPromise) {
+      void startSession();
+    }
     paneRuntimes.get(frameSnapshot.focusedPaneId ?? "")?.terminal.focus();
     return;
   }
@@ -3679,6 +4026,9 @@ function closeSurface(): void {
   updateFocusedSession();
   renderTerminalStatus();
   sendResize();
+  if (!terminalStarted && !terminalStartPromise) {
+    void startSession();
+  }
   paneRuntimes.get(frameSnapshot.focusedPaneId ?? "")?.terminal.focus();
 }
 
@@ -3687,7 +4037,7 @@ function closeStore(): void {
 }
 
 launchpadOpenButton.addEventListener("click", openLaunchpad);
-storeOpenButton.addEventListener("click", openStore);
+storeOpenButton.addEventListener("click", () => openStore());
 appsOpenButton.addEventListener("click", openMyApps);
 launchpadCloseButton.addEventListener("click", closeSurface);
 storeCloseButton.addEventListener("click", closeSurface);
@@ -3828,6 +4178,37 @@ workspaceOpenShellButton.addEventListener("click", () => void discardWorkspaceAn
 workspaceDismissButton.addEventListener("click", () => void discardWorkspaceAndOpenShell());
 
 window.addEventListener("keydown", (event) => {
+  if (onboardingOpen) {
+    if (event.key === "Tab") {
+      return;
+    }
+    if (
+      event.target instanceof HTMLSelectElement &&
+      ["ArrowDown", "ArrowUp", "ArrowLeft", "ArrowRight", "Home", "End", "Enter"].includes(event.key)
+    ) {
+      return;
+    }
+
+    event.preventDefault();
+    event.stopPropagation();
+    if (event.key === "ArrowDown" || event.key === "ArrowRight") {
+      moveOnboardingSelection(1);
+    } else if (event.key === "ArrowUp" || event.key === "ArrowLeft") {
+      moveOnboardingSelection(-1);
+    } else if (event.key === "Home") {
+      selectedOnboardingChoice = onboardingChoices[0].id;
+      renderOnboardingChoices(true);
+    } else if (event.key === "End") {
+      selectedOnboardingChoice = onboardingChoices.at(-1)!.id;
+      renderOnboardingChoices(true);
+    } else if (event.key === "Enter") {
+      completeOnboarding(selectedOnboardingChoice);
+    } else if (event.key === "Escape") {
+      completeOnboarding("terminal");
+    }
+    return;
+  }
+
   if (workspaceRecoveryOpen) {
     if (event.key === "Escape") {
       event.preventDefault();
@@ -3875,7 +4256,7 @@ void listen<SessionExited>("session-exited", (event) => {
   }
 });
 
-async function startSession(): Promise<void> {
+async function createInitialSession(preferredCwd: string | null): Promise<void> {
   const output = new Channel<Uint8Array>();
   const pendingOutput: Uint8Array[] = [];
   let outputSessionId: string | undefined;
@@ -3888,31 +4269,68 @@ async function startSession(): Promise<void> {
     }
   };
 
-  try {
-    const nextSnapshot = await invoke<FrameSnapshot>("frame_create_tab", {
-      request: frameRequest(),
-      onOutput: output,
-    });
-    outputSessionId = nextSnapshot.focusedPaneId
-      ? nextSnapshot.tabs
-          .flatMap((tab) => tab.panes)
-          .find((pane) => pane.id === nextSnapshot.focusedPaneId)?.session.id
-      : undefined;
-    renderFrame(nextSnapshot);
-    sessionAccepted = true;
-    for (const chunk of pendingOutput) {
-      if (outputSessionId) {
-        writeToPane(outputSessionId, chunk);
-      }
-    }
-    setTerminalStatus("ready", "ready");
-    sendResize();
-  } catch (error) {
-    showError(`Could not start the terminal session: ${String(error)}`);
+  const request = frameRequest();
+  if (preferredCwd) {
+    request.cwd = preferredCwd;
   }
+  const nextSnapshot = await invoke<FrameSnapshot>("frame_create_tab", {
+    request,
+    onOutput: output,
+  });
+  outputSessionId = nextSnapshot.focusedPaneId
+    ? nextSnapshot.tabs
+        .flatMap((tab) => tab.panes)
+        .find((pane) => pane.id === nextSnapshot.focusedPaneId)?.session.id
+    : undefined;
+  renderFrame(nextSnapshot);
+  sessionAccepted = true;
+  for (const chunk of pendingOutput) {
+    if (outputSessionId) {
+      writeToPane(outputSessionId, chunk);
+    }
+  }
+  terminalStarted = true;
+  setTerminalStatus("ready", "ready");
+  sendResize();
+}
+
+async function startSession(preferredCwd: string | null = null): Promise<void> {
+  if (terminalStarted) {
+    return;
+  }
+  if (terminalStartPromise) {
+    return terminalStartPromise;
+  }
+
+  terminalStartPromise = (async () => {
+    try {
+      await createInitialSession(preferredCwd);
+    } catch (error) {
+      if (preferredCwd) {
+        writeLocalPreference(lastWorkspaceStorageKey, null);
+        try {
+          await createInitialSession(null);
+          setTerminalStatus("terminal · last Workspace unavailable", "error");
+          return;
+        } catch (fallbackError) {
+          showError(
+            `Could not restore the last Workspace or start a terminal session: ${String(fallbackError)}`,
+          );
+          return;
+        }
+      }
+      showError(`Could not start the terminal session: ${String(error)}`);
+    } finally {
+      terminalStartPromise = undefined;
+    }
+  })();
+
+  return terminalStartPromise;
 }
 
 leaderHint.textContent = `Leader ${leaderLabel()}`;
-void loadWorkspaceOnStartup();
-void refreshLaunchpad();
-void refreshMyApps();
+if (readLocalPreference(onboardingCompletedStorageKey) === "true") {
+  openStartupBehavior();
+} else {
+  openOnboarding();
+}
