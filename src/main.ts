@@ -54,6 +54,7 @@ type FrameSnapshot = {
 
 type WorkspaceSettings = {
   leaderChord: string;
+  agentPolicies?: Record<string, AgentPolicy>;
 };
 
 type WorkspaceDocument = {
@@ -196,6 +197,36 @@ type CatalogEntry = {
   manifest: CatalogManifest;
   statuses: CatalogStatus[];
   detection: CatalogDetection | null;
+};
+
+type AgentPermissionMode = "ask" | "approve" | "bypass";
+type AgentFollowUpMode = "queue" | "steer";
+type AgentSessionMode = "task" | "chat";
+type AgentPolicyScope = "workspace" | "session";
+
+type AgentPolicy = {
+  permission: AgentPermissionMode;
+  followUp: AgentFollowUpMode;
+};
+
+type AgentEntry = {
+  id: string;
+  name: string;
+  summary: string;
+  publisher: string;
+  installed: boolean;
+  launchable: boolean;
+  executablePath: string | null;
+  profileId: string | null;
+  ownership: string | null;
+  storeEntryId: string;
+};
+
+type AgentLaunchContext = {
+  mode: AgentSessionMode;
+  task: string;
+  policy: AgentPolicy;
+  workspaceRoot: string | null;
 };
 
 type LaunchpadEntry = {
@@ -486,6 +517,65 @@ function startupBehaviorLabel(value: StartupBehavior): string {
   return startupBehaviorOptions.find((option) => option.value === value)?.label ?? "Terminal";
 }
 
+const defaultAgentPolicy: AgentPolicy = {
+  permission: "ask",
+  followUp: "queue",
+};
+
+function normalizeAgentPermission(value: unknown): AgentPermissionMode {
+  return value === "approve" || value === "bypass" ? value : "ask";
+}
+
+function normalizeAgentFollowUp(value: unknown): AgentFollowUpMode {
+  return value === "steer" ? "steer" : "queue";
+}
+
+function normalizeAgentPolicy(value: unknown): AgentPolicy {
+  if (!value || typeof value !== "object") {
+    return { ...defaultAgentPolicy };
+  }
+  const candidate = value as { permission?: unknown; followUp?: unknown };
+  return {
+    permission: normalizeAgentPermission(candidate.permission),
+    followUp: normalizeAgentFollowUp(candidate.followUp),
+  };
+}
+
+function normalizeAgentPolicies(value: unknown): Record<string, AgentPolicy> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return {};
+  }
+  return Object.fromEntries(
+    Object.entries(value as Record<string, unknown>)
+      .filter(([id]) => id.trim().length > 0)
+      .map(([id, policy]) => [id, normalizeAgentPolicy(policy)]),
+  );
+}
+
+function effectiveAgentPolicy(agentId: string): AgentPolicy {
+  return (
+    sessionAgentOverrides.get(agentId) ??
+    workspaceAgentPolicies[agentId] ??
+    { ...defaultAgentPolicy }
+  );
+}
+
+function agentPermissionLabel(value: AgentPermissionMode): string {
+  return {
+    ask: "Ask for Approval",
+    approve: "Approve for Me",
+    bypass: "Bypass Permissions",
+  }[value];
+}
+
+function agentFollowUpLabel(value: AgentFollowUpMode): string {
+  return value === "steer" ? "Steer" : "Queue";
+}
+
+function agentPolicySummary(policy: AgentPolicy): string {
+  return `${agentPermissionLabel(policy.permission)} · ${agentFollowUpLabel(policy.followUp)}`;
+}
+
 const app = document.querySelector<HTMLDivElement>("#app");
 
 if (!app) {
@@ -506,6 +596,9 @@ app.innerHTML = `
       <button class="topbar-action" type="button" data-apps-open aria-expanded="false">
         My Apps <span class="apps-update-badge" data-apps-update-badge hidden aria-live="polite"></span>
         <span class="key-hint">palette</span>
+      </button>
+      <button class="topbar-action" type="button" data-agents-open aria-expanded="false">
+        Agents <span class="key-hint">palette</span>
       </button>
       <div class="status" data-status>connecting</div>
     </header>
@@ -725,6 +818,39 @@ app.innerHTML = `
           <span>Esc terminal</span>
         </div>
       </section>
+      <section class="store-shell agent-cockpit" data-agents-view hidden aria-label="Coding agents">
+        <div class="store-toolbar">
+          <div class="store-heading">
+            <span class="store-eyebrow">AGENT COCKPIT</span>
+            <span class="store-title">Choose an agent, then choose Task or General Chat</span>
+          </div>
+          <label class="store-control">
+            <span>Search</span>
+            <input data-agent-search type="search" placeholder="name, publisher" autocomplete="off" />
+          </label>
+          <button class="store-close" type="button" data-agents-close>Esc · terminal</button>
+        </div>
+        <div class="store-notice" data-agent-notice>
+          Installed and launchable agents appear first. Unavailable agents stay linked to their Store page.
+        </div>
+        <div class="store-content">
+          <section class="store-list-panel" aria-label="Coding agents">
+            <div class="store-list-header">
+              <span>Agents</span>
+              <span data-agent-count>loading…</span>
+            </div>
+            <div class="store-list" data-agent-list role="listbox" aria-label="Coding agents"></div>
+            <div class="store-error" data-agent-error hidden></div>
+          </section>
+          <article class="store-detail" data-agent-detail aria-live="polite"></article>
+        </div>
+        <div class="store-footer">
+          <span>↑↓ choose agent</span>
+          <span>Enter open task setup</span>
+          <span>Policy stays visible</span>
+          <span>Esc terminal</span>
+        </div>
+      </section>
     </main>
     <footer class="bottombar">
       <span>Leader opens commands</span>
@@ -758,6 +884,7 @@ const workspaceDismissButton = app.querySelector<HTMLButtonElement>("[data-works
 const launchpadOpenButton = app.querySelector<HTMLButtonElement>("[data-launchpad-open]")!;
 const storeOpenButton = app.querySelector<HTMLButtonElement>("[data-store-open]")!;
 const appsOpenButton = app.querySelector<HTMLButtonElement>("[data-apps-open]")!;
+const agentsOpenButton = app.querySelector<HTMLButtonElement>("[data-agents-open]")!;
 const appsUpdateBadge = app.querySelector<HTMLSpanElement>("[data-apps-update-badge]")!;
 const launchpadCloseButton = app.querySelector<HTMLButtonElement>("[data-launchpad-close]")!;
 const storeCloseButton = app.querySelector<HTMLButtonElement>("[data-store-close]")!;
@@ -784,6 +911,14 @@ const appsCount = app.querySelector<HTMLSpanElement>("[data-apps-count]")!;
 const appsList = app.querySelector<HTMLDivElement>("[data-apps-list]")!;
 const appsError = app.querySelector<HTMLDivElement>("[data-apps-error]")!;
 const appsDetail = app.querySelector<HTMLElement>("[data-apps-detail]")!;
+const agentsView = app.querySelector<HTMLElement>("[data-agents-view]")!;
+const agentsCloseButton = app.querySelector<HTMLButtonElement>("[data-agents-close]")!;
+const agentSearch = app.querySelector<HTMLInputElement>("[data-agent-search]")!;
+const agentNotice = app.querySelector<HTMLDivElement>("[data-agent-notice]")!;
+const agentCount = app.querySelector<HTMLSpanElement>("[data-agent-count]")!;
+const agentList = app.querySelector<HTMLDivElement>("[data-agent-list]")!;
+const agentError = app.querySelector<HTMLDivElement>("[data-agent-error]")!;
+const agentDetail = app.querySelector<HTMLElement>("[data-agent-detail]")!;
 const commandOverlay = app.querySelector<HTMLElement>("[data-command-overlay]")!;
 const commandCloseButton = app.querySelector<HTMLButtonElement>("[data-command-close]")!;
 const commandSearch = app.querySelector<HTMLInputElement>("[data-command-search]")!;
@@ -812,6 +947,7 @@ if (
   !launchpadOpenButton ||
   !storeOpenButton ||
   !appsOpenButton ||
+  !agentsOpenButton ||
   !appsUpdateBadge ||
   !launchpadCloseButton ||
   !storeCloseButton ||
@@ -838,6 +974,14 @@ if (
   !appsList ||
   !appsError ||
   !appsDetail ||
+  !agentsView ||
+  !agentsCloseButton ||
+  !agentSearch ||
+  !agentNotice ||
+  !agentCount ||
+  !agentList ||
+  !agentError ||
+  !agentDetail ||
   !commandOverlay ||
   !commandCloseButton ||
   !commandSearch ||
@@ -867,7 +1011,7 @@ let resizeTimer: number | undefined;
 let terminalStatusText = "connecting";
 let terminalStatusState = "";
 let storeOpen = false;
-let activeSurface: "launchpad" | "store" | "apps" = "launchpad";
+let activeSurface: "launchpad" | "store" | "apps" | "agents" = "launchpad";
 let launchpadEntries: LaunchpadEntry[] = [];
 let selectedLaunchpadId: string | undefined;
 let launchpadRequestId = 0;
@@ -884,6 +1028,15 @@ let myAppsRefreshTimer: number | undefined;
 let customAppEntries: CustomAppProfile[] = [];
 let editingCustomAppId: string | undefined;
 let launchBusy = false;
+let agentEntries: AgentEntry[] = [];
+let selectedAgentId: string | undefined;
+let agentRequestId = 0;
+let agentRefreshTimer: number | undefined;
+let agentMode: AgentSessionMode = "task";
+let agentDraftTask = "";
+let agentDraftPermission: AgentPermissionMode = "ask";
+let agentDraftFollowUp: AgentFollowUpMode = "queue";
+let agentDraftScope: AgentPolicyScope = "workspace";
 let commandOverlayOpen = false;
 let selectedCommandId: string | undefined;
 let pendingClose: "pane" | "tab" | undefined;
@@ -904,6 +1057,8 @@ let launchpadMetadataReady = false;
 let customAppMetadataReady = false;
 let workspaceSaveTimer: number | undefined;
 let workspaceSaveInFlight: Promise<void> | undefined;
+let workspaceAgentPolicies: Record<string, AgentPolicy> = {};
+const sessionAgentOverrides = new Map<string, AgentPolicy>();
 
 function renderTerminalStatus(): void {
   status.textContent = terminalStatusText;
@@ -1004,6 +1159,7 @@ function setTopbarActionsDisabled(disabled: boolean): void {
   launchpadOpenButton.disabled = disabled;
   storeOpenButton.disabled = disabled;
   appsOpenButton.disabled = disabled;
+  agentsOpenButton.disabled = disabled;
 }
 
 function renderOnboardingChoices(focusSelected = false): void {
@@ -1085,7 +1241,7 @@ function completeOnboarding(choiceId: OnboardingChoiceId): void {
       openMyApps();
       break;
     case "agent":
-      openStore("agent");
+      openAgentCockpit();
       break;
     case "restore":
       void loadWorkspaceOnStartup();
@@ -1103,6 +1259,7 @@ function openOnboarding(): void {
   launchpadView.hidden = true;
   storeView.hidden = true;
   appsView.hidden = true;
+  agentsView.hidden = true;
   storeOpen = false;
   setTopbarActionsDisabled(true);
   sessionMeta.textContent = "first run";
@@ -1458,6 +1615,24 @@ function frameCommands(): FrameCommand[] {
       run: () => {
         closeCommandOverlay();
         openMyApps();
+      },
+    },
+    {
+      id: "agents",
+      label: "Coding Agents",
+      description: "Choose an installed agent, start a task, or open General Chat.",
+      run: () => {
+        closeCommandOverlay();
+        openAgentCockpit();
+      },
+    },
+    {
+      id: "agent-policy",
+      label: "Agents · Workspace Policy",
+      description: "Open permission and follow-up policy controls for the selected agent.",
+      run: () => {
+        closeCommandOverlay();
+        openAgentCockpit();
       },
     },
     {
@@ -1846,9 +2021,13 @@ function renderWorkspaceRecovery(): void {
 }
 
 function openWorkspaceRecovery(document: WorkspaceDocument, message: string): void {
+  if (activeWorkspaceId !== document.id) {
+    sessionAgentOverrides.clear();
+  }
   pendingWorkspace = document;
   activeWorkspaceId = document.id;
   activeWorkspaceName = document.name;
+  workspaceAgentPolicies = normalizeAgentPolicies(document.settings?.agentPolicies);
   const savedLeaderChord = document.settings?.leaderChord;
   if (typeof savedLeaderChord === "string" && savedLeaderChord.trim()) {
     leaderChord = normalizedLeader(savedLeaderChord);
@@ -1861,6 +2040,7 @@ function openWorkspaceRecovery(document: WorkspaceDocument, message: string): vo
   launchpadView.hidden = true;
   storeView.hidden = true;
   appsView.hidden = true;
+  agentsView.hidden = true;
   commandOverlay.hidden = true;
   commandOverlayOpen = false;
   storeOpen = false;
@@ -1891,6 +2071,7 @@ async function discardWorkspaceAndOpenShell(): Promise<void> {
   }
   pendingWorkspace = null;
   activeWorkspaceId = null;
+  workspaceAgentPolicies = {};
   closeWorkspaceRecovery();
   if (frameSnapshot.tabs.length > 0) {
     try {
@@ -2113,7 +2294,10 @@ async function saveWorkspaceNow(): Promise<void> {
         frame: frameSnapshot,
         appPins: launchpadEntries.filter((entry) => entry.pinned).map((entry) => entry.id),
         launchProfiles: customAppEntries,
-        settings: { leaderChord },
+        settings: {
+          leaderChord,
+          agentPolicies: workspaceAgentPolicies,
+        },
       },
     });
     activeWorkspaceId = document.id;
@@ -2396,6 +2580,458 @@ function createInstallButton(label: string, onClick: () => void): HTMLButtonElem
   return button;
 }
 
+const agentPermissionOptions: Array<{
+  value: AgentPermissionMode;
+  label: string;
+  description: string;
+}> = [
+  {
+    value: "ask",
+    label: "Ask for Approval",
+    description: "The agent should pause before changes, commands, or external tools.",
+  },
+  {
+    value: "approve",
+    label: "Approve for Me",
+    description: "Routine requests can proceed without an extra Arkonad prompt; review the result.",
+  },
+  {
+    value: "bypass",
+    label: "Bypass Permissions",
+    description: "No Arkonad approval gate is added; use only in a trusted or disposable workspace.",
+  },
+];
+
+const agentFollowUpOptions: Array<{
+  value: AgentFollowUpMode;
+  label: string;
+  description: string;
+}> = [
+  {
+    value: "queue",
+    label: "Queue",
+    description: "Keep follow-up requests in order until the current turn finishes.",
+  },
+  {
+    value: "steer",
+    label: "Steer",
+    description: "Send the next request toward the active turn when the provider supports it.",
+  },
+];
+
+function agentSearchText(entry: AgentEntry): string {
+  return `${entry.name} ${entry.publisher} ${entry.summary}`.toLowerCase();
+}
+
+function resetAgentDraft(agentId: string): void {
+  const policy = effectiveAgentPolicy(agentId);
+  agentDraftPermission = policy.permission;
+  agentDraftFollowUp = policy.followUp;
+  agentDraftScope = sessionAgentOverrides.has(agentId) ? "session" : "workspace";
+  agentDraftTask = "";
+  agentMode = "task";
+}
+
+function renderAgentPolicySummary(
+  parent: HTMLElement,
+  entry: AgentEntry,
+  selectedPolicy: AgentPolicy,
+  scope: AgentPolicyScope,
+): void {
+  const current = effectiveAgentPolicy(entry.id);
+  const section = appendDetailSection(parent, "Effective policy");
+  const summary = makeElement(
+    "p",
+    "agent-policy-summary",
+    `${agentPolicySummary(current)} · ${sessionAgentOverrides.has(entry.id) ? "session override" : "Workspace Agent Policy"}`,
+  );
+  section.append(summary);
+  section.append(
+    makeElement(
+      "p",
+      "detail-note",
+      `This launch: ${agentPolicySummary(selectedPolicy)} · ${scope === "workspace" ? "saved for this workspace and agent" : "temporary for this session"}.`,
+    ),
+  );
+  section.append(
+    makeElement(
+      "p",
+      "agent-policy-help",
+      "Arkonad passes this policy as scoped context and keeps provider authentication and the provider's native TUI unchanged.",
+    ),
+  );
+}
+
+function renderAgentDetail(entry: AgentEntry | undefined): void {
+  agentDetail.replaceChildren();
+  if (!entry) {
+    agentDetail.append(makeElement("div", "store-empty-detail", "Select an agent to choose a mode."));
+    return;
+  }
+
+  const header = makeElement("header", "detail-header");
+  header.append(makeElement("span", "detail-category", "coding agent"));
+  header.append(makeElement("h2", "detail-title", entry.name));
+  header.append(makeElement("p", "detail-summary", entry.summary));
+  header.append(makeElement("p", "detail-meta", `${entry.publisher} · ${entry.installed ? entry.ownership ?? "installed" : "not installed"}`));
+  agentDetail.append(header);
+
+  const statusSection = appendDetailSection(agentDetail, "Availability");
+  appendDetailLine(statusSection, "Installed", entry.installed ? "yes" : "no");
+  appendDetailLine(statusSection, "Launchable", entry.launchable ? "yes" : "no");
+  appendDetailLine(statusSection, "Executable", entry.executablePath ?? "not resolved");
+
+  if (!entry.launchable) {
+    agentDetail.append(
+      makeElement(
+        "p",
+        "detail-note",
+        "This agent is listed but is not installed and launchable in the current environment.",
+      ),
+    );
+    agentDetail.append(
+      createInstallButton("Browse Store page", () => openStore("agent", entry.storeEntryId)),
+    );
+    return;
+  }
+
+  const modeSection = appendDetailSection(agentDetail, "Start mode");
+  const modeTabs = makeElement("div", "agent-mode-tabs");
+  const taskButton = makeElement("button", "agent-mode-tab", "New Task") as HTMLButtonElement;
+  taskButton.type = "button";
+  taskButton.classList.toggle("is-active", agentMode === "task");
+  taskButton.setAttribute("aria-pressed", String(agentMode === "task"));
+  taskButton.addEventListener("click", () => {
+    agentMode = "task";
+    renderAgentDetail(entry);
+  });
+  const chatButton = makeElement("button", "agent-mode-tab", "General Chat") as HTMLButtonElement;
+  chatButton.type = "button";
+  chatButton.classList.toggle("is-active", agentMode === "chat");
+  chatButton.setAttribute("aria-pressed", String(agentMode === "chat"));
+  chatButton.addEventListener("click", () => {
+    agentMode = "chat";
+    renderAgentDetail(entry);
+  });
+  modeTabs.append(taskButton, chatButton);
+  modeSection.append(modeTabs);
+
+  const selectedPolicy: AgentPolicy = {
+    permission: agentDraftPermission,
+    followUp: agentDraftFollowUp,
+  };
+  renderAgentPolicySummary(agentDetail, entry, selectedPolicy, agentDraftScope);
+
+  const form = makeElement("form", "agent-task-form") as HTMLFormElement;
+  const taskLabel = makeElement("label", "agent-task-field");
+  taskLabel.append(
+    makeElement("span", undefined, agentMode === "task" ? "Short task" : "Question or context"),
+  );
+  const taskInput = makeElement("textarea") as HTMLTextAreaElement;
+  taskInput.rows = 4;
+  taskInput.required = agentMode === "task";
+  taskInput.placeholder = agentMode === "task"
+    ? "e.g. Add a dark-mode toggle to the settings screen"
+    : "Ask a question or leave blank to open a read-only chat";
+  taskInput.value = agentDraftTask;
+  taskInput.setAttribute("aria-label", agentMode === "task" ? "Short task" : "General Chat question or context");
+  taskInput.addEventListener("input", () => {
+    agentDraftTask = taskInput.value;
+  });
+  taskLabel.append(taskInput);
+  form.append(taskLabel);
+
+  const policyGrid = makeElement("div", "agent-policy-grid");
+  const permissionFieldset = makeElement("fieldset", "agent-policy-fieldset") as HTMLFieldSetElement;
+  permissionFieldset.append(makeElement("legend", undefined, "Permission mode"));
+  for (const option of agentPermissionOptions) {
+    const label = makeElement("label", "agent-policy-option");
+    const input = makeElement("input") as HTMLInputElement;
+    input.type = "radio";
+    input.name = `agent-permission-${entry.id}`;
+    input.value = option.value;
+    input.checked = agentDraftPermission === option.value;
+    input.addEventListener("change", () => {
+      if (input.checked) {
+        agentDraftPermission = option.value;
+      }
+    });
+    const copy = makeElement("span", "agent-policy-copy");
+    copy.append(
+      makeElement("strong", undefined, option.label),
+      makeElement("span", "agent-policy-description", option.description),
+    );
+    label.append(input, copy);
+    permissionFieldset.append(label);
+  }
+
+  const followUpFieldset = makeElement("fieldset", "agent-policy-fieldset") as HTMLFieldSetElement;
+  followUpFieldset.append(makeElement("legend", undefined, "Follow-up behavior"));
+  for (const option of agentFollowUpOptions) {
+    const label = makeElement("label", "agent-policy-option");
+    const input = makeElement("input") as HTMLInputElement;
+    input.type = "radio";
+    input.name = `agent-follow-up-${entry.id}`;
+    input.value = option.value;
+    input.checked = agentDraftFollowUp === option.value;
+    input.addEventListener("change", () => {
+      if (input.checked) {
+        agentDraftFollowUp = option.value;
+      }
+    });
+    const copy = makeElement("span", "agent-policy-copy");
+    copy.append(
+      makeElement("strong", undefined, option.label),
+      makeElement("span", "agent-policy-description", option.description),
+    );
+    label.append(input, copy);
+    followUpFieldset.append(label);
+  }
+  policyGrid.append(permissionFieldset, followUpFieldset);
+  form.append(policyGrid);
+
+  const scopeLabel = makeElement("label", "agent-scope-field");
+  scopeLabel.append(makeElement("span", undefined, "Policy scope"));
+  const scopeSelect = makeElement("select") as HTMLSelectElement;
+  scopeSelect.className = "agent-scope-select";
+  scopeSelect.setAttribute("aria-label", "Agent policy scope");
+  scopeSelect.innerHTML = `
+    <option value="workspace">Workspace Agent Policy</option>
+    <option value="session">This session only</option>
+  `;
+  scopeSelect.value = agentDraftScope;
+  scopeSelect.addEventListener("change", () => {
+    agentDraftScope = scopeSelect.value === "session" ? "session" : "workspace";
+  });
+  scopeLabel.append(scopeSelect);
+  form.append(scopeLabel);
+
+  if (agentMode === "chat") {
+    const chatNotice = makeElement(
+      "p",
+      "agent-chat-notice",
+      "General Chat is non-writing by default. If you need a change, promote this setup to Agent Task before sending it.",
+    );
+    form.append(chatNotice);
+    const promote = makeElement("button", "detail-action", "Promote to Agent Task") as HTMLButtonElement;
+    promote.type = "button";
+    promote.addEventListener("click", () => {
+      agentMode = "task";
+      renderAgentDetail(entry);
+    });
+    form.append(promote);
+  } else {
+    form.append(
+      makeElement(
+        "p",
+        "agent-policy-help",
+        "Starting is immediate after you choose the policy. The selected agent keeps its native terminal interface and authentication flow.",
+      ),
+    );
+  }
+
+  const actions = makeElement("div", "install-button-row");
+  const start = makeElement(
+    "button",
+    "agent-start-button",
+    agentMode === "task" ? "Start New Task" : "Start General Chat",
+  ) as HTMLButtonElement;
+  start.type = "submit";
+  start.disabled = launchBusy;
+  actions.append(start);
+  form.append(actions);
+  form.addEventListener("submit", (event) => {
+    event.preventDefault();
+    if (agentMode === "task" && !agentDraftTask.trim()) {
+      agentNotice.textContent = "Add a short task before starting. General Chat can open without a task.";
+      taskInput.focus();
+      return;
+    }
+    void startAgent(entry);
+  });
+  agentDetail.append(form);
+}
+
+function renderAgentList(): void {
+  const query = agentSearch.value.trim().toLowerCase();
+  const visibleEntries = agentEntries.filter((entry) => !query || agentSearchText(entry).includes(query));
+  agentList.replaceChildren();
+  agentCount.textContent = `${visibleEntries.length} shown`;
+  if (visibleEntries.length === 0) {
+    agentList.append(makeElement("div", "store-empty-list", "No coding agents match this search."));
+    renderAgentDetail(undefined);
+    return;
+  }
+  if (!visibleEntries.some((entry) => entry.id === selectedAgentId)) {
+    selectedAgentId = visibleEntries[0].id;
+    resetAgentDraft(selectedAgentId);
+  }
+  for (const entry of visibleEntries) {
+    const selected = entry.id === selectedAgentId;
+    const row = makeElement("button", "store-row") as HTMLButtonElement;
+    row.type = "button";
+    row.dataset.agentId = entry.id;
+    row.setAttribute("role", "option");
+    row.setAttribute("aria-selected", String(selected));
+    row.classList.toggle("is-selected", selected);
+    const rowTop = makeElement("span", "store-row-top");
+    rowTop.append(makeElement("strong", undefined, entry.name));
+    rowTop.append(makeElement("span", "store-row-category", entry.launchable ? "ready" : entry.installed ? "installed" : "Store"));
+    row.append(rowTop, makeElement("span", "store-row-summary", entry.summary));
+    row.append(makeElement("span", `store-row-state ${entry.launchable ? "status-active" : "status-unknown"}`, entry.launchable ? "launchable" : entry.installed ? "installed" : "unavailable"));
+    row.addEventListener("click", () => selectAgent(entry.id));
+    agentList.append(row);
+  }
+  renderAgentDetail(visibleEntries.find((entry) => entry.id === selectedAgentId));
+}
+
+function selectAgent(id: string, focusRow = false): void {
+  if (!agentEntries.some((entry) => entry.id === id)) {
+    return;
+  }
+  if (selectedAgentId !== id) {
+    selectedAgentId = id;
+    resetAgentDraft(id);
+  }
+  renderAgentList();
+  if (focusRow) {
+    window.requestAnimationFrame(() => {
+      agentList.querySelector<HTMLButtonElement>(`[data-agent-id="${id}"]`)?.focus();
+    });
+  }
+}
+
+function moveAgentSelection(offset: number): void {
+  const query = agentSearch.value.trim().toLowerCase();
+  const visibleEntries = agentEntries.filter((entry) => !query || agentSearchText(entry).includes(query));
+  if (visibleEntries.length === 0) {
+    return;
+  }
+  const currentIndex = visibleEntries.findIndex((entry) => entry.id === selectedAgentId);
+  const nextIndex = (Math.max(currentIndex, 0) + offset + visibleEntries.length) % visibleEntries.length;
+  selectAgent(visibleEntries[nextIndex].id, true);
+}
+
+async function refreshAgents(): Promise<void> {
+  const requestId = ++agentRequestId;
+  agentError.hidden = true;
+  agentNotice.textContent = "Checking installed and launchable coding agents…";
+  agentCount.textContent = "loading…";
+  try {
+    try {
+      await invoke<CatalogDetection[]>("catalog_detect");
+    } catch {
+      // The catalog response remains useful when PATH detection is unavailable.
+    }
+    const [catalogEntries, appsSnapshot] = await Promise.all([
+      invoke<CatalogEntry[]>("catalog_list", { query: null, category: "agent" }),
+      invoke<MyAppsSnapshot>("my_apps_list"),
+    ]);
+    if (requestId !== agentRequestId) {
+      return;
+    }
+    const appsById = new Map(
+      appsSnapshot.entries
+        .filter((entry) => entry.category === "agent")
+        .map((entry) => [entry.manifestId, entry]),
+    );
+    agentEntries = catalogEntries
+      .map((entry): AgentEntry => {
+        const appEntry = appsById.get(entry.manifest.id);
+        const launchable = Boolean(appEntry?.launchable || entry.detection);
+        const installed = Boolean(appEntry || entry.detection);
+        return {
+          id: entry.manifest.id,
+          name: entry.manifest.name,
+          summary: entry.manifest.summary,
+          publisher: entry.manifest.publisher,
+          installed,
+          launchable,
+          executablePath: appEntry?.executablePath ?? entry.detection?.path ?? null,
+          profileId: appEntry?.launchProfileId ?? entry.manifest.launchProfiles[0]?.id ?? null,
+          ownership: appEntry?.ownership ?? (entry.detection ? "detected" : null),
+          storeEntryId: entry.manifest.id,
+        };
+      })
+      .sort((left, right) => {
+        const rank = (entry: AgentEntry) => (entry.launchable ? 0 : entry.installed ? 1 : 2);
+        return rank(left) - rank(right) || left.name.localeCompare(right.name);
+      });
+    agentNotice.textContent = "Installed and launchable agents appear first. Store links do not install anything by themselves.";
+    renderAgentList();
+  } catch (error) {
+    if (requestId !== agentRequestId) {
+      return;
+    }
+    agentEntries = [];
+    renderAgentList();
+    agentError.hidden = false;
+    agentError.textContent = `Could not read coding agents: ${String(error)}`;
+  }
+}
+
+function scheduleAgentRefresh(): void {
+  if (agentRefreshTimer !== undefined) {
+    window.clearTimeout(agentRefreshTimer);
+  }
+  agentRefreshTimer = window.setTimeout(() => void refreshAgents(), 140);
+}
+
+function openAgentCockpit(): void {
+  if (storeOpen && activeSurface === "agents") {
+    agentSearch.focus();
+    return;
+  }
+  storeOpen = true;
+  activeSurface = "agents";
+  terminalShell.hidden = true;
+  launchpadView.hidden = true;
+  storeView.hidden = true;
+  appsView.hidden = true;
+  agentsView.hidden = false;
+  launchpadOpenButton.setAttribute("aria-expanded", "false");
+  storeOpenButton.setAttribute("aria-expanded", "false");
+  appsOpenButton.setAttribute("aria-expanded", "false");
+  agentsOpenButton.setAttribute("aria-expanded", "true");
+  sessionMeta.textContent = "agent cockpit";
+  status.textContent = "agents";
+  status.dataset.state = "ready";
+  refreshWorkspaceMetadata();
+  void refreshAgents();
+  window.requestAnimationFrame(() => agentSearch.focus());
+}
+
+async function startAgent(entry: AgentEntry): Promise<void> {
+  const policy: AgentPolicy = {
+    permission: agentDraftPermission,
+    followUp: agentDraftFollowUp,
+  };
+  if (agentDraftScope === "workspace") {
+    workspaceAgentPolicies[entry.id] = policy;
+    sessionAgentOverrides.delete(entry.id);
+    scheduleWorkspaceSave();
+  } else {
+    sessionAgentOverrides.set(entry.id, policy);
+  }
+  const context: AgentLaunchContext = {
+    mode: agentMode,
+    task: agentDraftTask.trim(),
+    policy,
+    workspaceRoot: focusedPane()?.session.cwd ?? pendingWorkspace?.root ?? null,
+  };
+  await launchTarget(
+    {
+      id: entry.id,
+      name: entry.name,
+      profileId: entry.profileId,
+      executablePath: entry.executablePath,
+      supportsWorkingDirectory: true,
+    },
+    { kind: "currentDirectory" },
+    context,
+  );
+}
+
 type LaunchTarget = {
   id: string;
   name: string;
@@ -2428,7 +3064,32 @@ function launchLocationFromControls(
   }
 }
 
-async function launchTarget(target: LaunchTarget, location: LaunchLocation): Promise<void> {
+function agentEnvironment(context: AgentLaunchContext): Record<string, string> {
+  const environment: Record<string, string> = {
+    ARKONAD_AGENT_MODE: context.mode,
+    ARKONAD_AGENT_PERMISSION: context.policy.permission,
+    ARKONAD_AGENT_FOLLOW_UP: context.policy.followUp,
+    ARKONAD_AGENT_WRITE_ACCESS: context.mode === "chat" ? "disabled" : "enabled",
+  };
+  if (context.workspaceRoot) {
+    environment.ARKONAD_WORKSPACE_ROOT = context.workspaceRoot;
+  }
+  return environment;
+}
+
+function agentInitialPrompt(context: AgentLaunchContext): string {
+  if (context.mode === "chat") {
+    const question = context.task || "Open a read-only General Chat session.";
+    return `${question}\n\nGeneral Chat boundary: do not change files, run mutating commands, install tools, commit, or push. If a write is requested, ask the user to promote this session to Agent Task first.`;
+  }
+  return context.task;
+}
+
+async function launchTarget(
+  target: LaunchTarget,
+  location: LaunchLocation,
+  context?: AgentLaunchContext,
+): Promise<void> {
   if (launchBusy) {
     return;
   }
@@ -2453,6 +3114,7 @@ async function launchTarget(target: LaunchTarget, location: LaunchLocation): Pro
         profileId: target.profileId,
         location,
         currentDirectory: focusedPane()?.session.cwd ?? null,
+        environment: context ? agentEnvironment(context) : {},
       },
       onOutput: output,
     });
@@ -2464,6 +3126,17 @@ async function launchTarget(target: LaunchTarget, location: LaunchLocation): Pro
     sessionAccepted = true;
     for (const chunk of pendingOutput) {
       writeToPane(nextSession.id, chunk);
+    }
+    if (context) {
+      const initialPrompt = agentInitialPrompt(context);
+      if (initialPrompt) {
+        window.setTimeout(() => {
+          void invoke("write_session", {
+            id: nextSession.id,
+            data: new TextEncoder().encode(`${initialPrompt}\r`),
+          }).catch((error: unknown) => showError(`Could not send the agent context: ${String(error)}`));
+        }, 450);
+      }
     }
     cwdLabel.textContent = nextSession.cwd;
     launchBusy = false;
@@ -2481,6 +3154,8 @@ async function launchTarget(target: LaunchTarget, location: LaunchLocation): Pro
       launchpadNotice.textContent = message;
     } else if (activeSurface === "apps") {
       appsNotice.textContent = message;
+    } else if (activeSurface === "agents") {
+      agentNotice.textContent = message;
     }
   }
 }
@@ -3253,9 +3928,11 @@ function openLaunchpad(): void {
   launchpadView.hidden = false;
   storeView.hidden = true;
   appsView.hidden = true;
+  agentsView.hidden = true;
   launchpadOpenButton.setAttribute("aria-expanded", "true");
   storeOpenButton.setAttribute("aria-expanded", "false");
   appsOpenButton.setAttribute("aria-expanded", "false");
+  agentsOpenButton.setAttribute("aria-expanded", "false");
   sessionMeta.textContent = "launchpad";
   status.textContent = "launchpad";
   status.dataset.state = "ready";
@@ -3955,9 +4632,13 @@ function scheduleStoreRefresh(): void {
   storeRefreshTimer = window.setTimeout(() => void refreshStore(), 140);
 }
 
-function openStore(category?: CatalogCategory | ""): void {
+function openStore(category?: CatalogCategory | "", focusId?: string): void {
   if (category !== undefined) {
     storeCategory.value = category;
+  }
+  if (focusId) {
+    storeSearch.value = "";
+    selectedStoreId = focusId;
   }
 
   if (storeOpen && activeSurface === "store") {
@@ -3974,9 +4655,11 @@ function openStore(category?: CatalogCategory | ""): void {
   launchpadView.hidden = true;
   appsView.hidden = true;
   storeView.hidden = false;
+  agentsView.hidden = true;
   launchpadOpenButton.setAttribute("aria-expanded", "false");
   storeOpenButton.setAttribute("aria-expanded", "true");
   appsOpenButton.setAttribute("aria-expanded", "false");
+  agentsOpenButton.setAttribute("aria-expanded", "false");
   sessionMeta.textContent = "store browser";
   status.textContent = "store";
   status.dataset.state = "ready";
@@ -3996,9 +4679,11 @@ function openMyApps(): void {
   launchpadView.hidden = true;
   storeView.hidden = true;
   appsView.hidden = false;
+  agentsView.hidden = true;
   launchpadOpenButton.setAttribute("aria-expanded", "false");
   storeOpenButton.setAttribute("aria-expanded", "false");
   appsOpenButton.setAttribute("aria-expanded", "true");
+  agentsOpenButton.setAttribute("aria-expanded", "false");
   sessionMeta.textContent = "my apps";
   status.textContent = "my apps";
   status.dataset.state = "ready";
@@ -4019,10 +4704,12 @@ function closeSurface(): void {
   launchpadView.hidden = true;
   storeView.hidden = true;
   appsView.hidden = true;
+  agentsView.hidden = true;
   terminalShell.hidden = false;
   launchpadOpenButton.setAttribute("aria-expanded", "false");
   storeOpenButton.setAttribute("aria-expanded", "false");
   appsOpenButton.setAttribute("aria-expanded", "false");
+  agentsOpenButton.setAttribute("aria-expanded", "false");
   updateFocusedSession();
   renderTerminalStatus();
   sendResize();
@@ -4039,9 +4726,11 @@ function closeStore(): void {
 launchpadOpenButton.addEventListener("click", openLaunchpad);
 storeOpenButton.addEventListener("click", () => openStore());
 appsOpenButton.addEventListener("click", openMyApps);
+agentsOpenButton.addEventListener("click", openAgentCockpit);
 launchpadCloseButton.addEventListener("click", closeSurface);
 storeCloseButton.addEventListener("click", closeSurface);
 appsCloseButton.addEventListener("click", closeSurface);
+agentsCloseButton.addEventListener("click", closeSurface);
 commandCloseButton.addEventListener("click", closeCommandOverlay);
 commandSearch.addEventListener("input", renderCommandList);
 commandSearch.addEventListener("keydown", (event) => {
@@ -4104,6 +4793,7 @@ storeList.addEventListener("keydown", (event) => {
   }
 });
 appsSearch.addEventListener("input", scheduleMyAppsRefresh);
+agentSearch.addEventListener("input", scheduleAgentRefresh);
 launchpadList.addEventListener("keydown", (event) => {
   if (event.key === "ArrowDown") {
     event.preventDefault();
@@ -4169,6 +4859,34 @@ appsList.addEventListener("keydown", (event) => {
     const activeRow = event.target instanceof HTMLButtonElement ? event.target : undefined;
     if (activeRow?.dataset.manifestId) {
       selectMyApp(activeRow.dataset.manifestId, true);
+    }
+  }
+});
+agentList.addEventListener("keydown", (event) => {
+  if (event.key === "ArrowDown") {
+    event.preventDefault();
+    moveAgentSelection(1);
+  } else if (event.key === "ArrowUp") {
+    event.preventDefault();
+    moveAgentSelection(-1);
+  } else if (event.key === "Home") {
+    event.preventDefault();
+    const first = agentEntries.find((entry) => agentSearchText(entry).includes(agentSearch.value.trim().toLowerCase()));
+    if (first) {
+      selectAgent(first.id, true);
+    }
+  } else if (event.key === "End") {
+    event.preventDefault();
+    const query = agentSearch.value.trim().toLowerCase();
+    const last = agentEntries.filter((entry) => agentSearchText(entry).includes(query)).at(-1);
+    if (last) {
+      selectAgent(last.id, true);
+    }
+  } else if (event.key === "Enter") {
+    event.preventDefault();
+    const activeRow = event.target instanceof HTMLButtonElement ? event.target : undefined;
+    if (activeRow?.dataset.agentId) {
+      selectAgent(activeRow.dataset.agentId, true);
     }
   }
 });
