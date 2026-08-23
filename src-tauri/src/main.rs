@@ -3,12 +3,14 @@ mod frame;
 mod installer;
 mod launcher;
 mod pty;
+mod workspace;
 
 use catalog::CatalogRuntime;
 use frame::FrameRuntime;
 use installer::InstallRuntime;
 use launcher::LaunchRuntime;
 use pty::SessionManager;
+use workspace::WorkspaceRuntime;
 
 fn main() {
     tauri::Builder::default()
@@ -18,6 +20,7 @@ fn main() {
         .manage(LaunchRuntime::default())
         .manage(FrameRuntime::default())
         .manage(SessionManager::default())
+        .manage(WorkspaceRuntime::default())
         .invoke_handler(tauri::generate_handler![
             catalog::catalog_detect,
             catalog::catalog_list,
@@ -40,15 +43,20 @@ fn main() {
             frame::frame_create_split,
             frame::frame_attach_session,
             frame::frame_activate_tab,
+            frame::frame_set_tab_title,
             frame::frame_focus_pane,
             frame::frame_focus_move,
             frame::frame_resize_split,
             frame::frame_close_focused,
             frame::frame_close_tab,
+            frame::frame_reset,
             pty::create_session,
             pty::write_session,
             pty::resize_session,
             pty::close_session,
+            workspace::workspace_save,
+            workspace::workspace_load,
+            workspace::workspace_delete,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Arkonad");
