@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::env;
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
@@ -31,6 +31,8 @@ pub struct LaunchProcessRequest {
     pub arguments: Vec<String>,
     pub shell: Option<String>,
     pub cwd: String,
+    #[serde(default)]
+    pub environment: BTreeMap<String, String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -152,6 +154,9 @@ impl PtySession {
             command
         };
 
+        for (key, value) in &request.environment {
+            command.env(key, value);
+        }
         command.cwd(Path::new(&request.cwd));
         Self::spawn_command(command, size)
     }
@@ -751,13 +756,17 @@ mod tests {
                 "-NoLogo".to_owned(),
                 "-NoProfile".to_owned(),
                 "-Command".to_owned(),
-                "Write-Output 'ARKONAD-LAUNCH'".to_owned(),
+                "Write-Output ('ARKONAD-LAUNCH-' + $env:ARKONAD_TEST_CONTEXT)".to_owned(),
             ],
             shell: None,
             cwd: env::current_dir()
                 .expect("test working directory should be available")
                 .to_string_lossy()
                 .into_owned(),
+            environment: BTreeMap::from([(
+                "ARKONAD_TEST_CONTEXT".to_owned(),
+                "context".to_owned(),
+            )]),
         };
         let (session, reader) = PtySession::spawn_launch(
             &request,
@@ -770,7 +779,7 @@ mod tests {
         )
         .expect("declared executable should start in the PTY");
 
-        let output = read_until_marker(&session, reader, "ARKONAD-LAUNCH");
-        assert!(String::from_utf8_lossy(&output).contains("ARKONAD-LAUNCH"));
+        let output = read_until_marker(&session, reader, "ARKONAD-LAUNCH-context");
+        assert!(String::from_utf8_lossy(&output).contains("ARKONAD-LAUNCH-context"));
     }
 }

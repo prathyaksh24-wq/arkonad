@@ -3,7 +3,7 @@ use crate::installer::{InstallReceipt, InstallRuntime, ReceiptOwnership};
 use crate::pty::{LaunchProcessRequest, SessionInfo, SessionManager};
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -100,6 +100,8 @@ pub struct LaunchRequest {
     pub location: LaunchLocation,
     #[serde(default)]
     pub current_directory: Option<String>,
+    #[serde(default)]
+    pub environment: BTreeMap<String, String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -332,6 +334,7 @@ impl LaunchRuntime {
         request: LaunchRequest,
         output: Channel<Vec<u8>>,
     ) -> Result<SessionInfo, String> {
+        validate_launch_environment(&request.environment)?;
         let _guard = self
             .state_lock
             .lock()
@@ -392,6 +395,7 @@ impl LaunchRuntime {
                 arguments: profile.arguments,
                 shell: profile.shell,
                 cwd: cwd.to_string_lossy().into_owned(),
+                environment: request.environment,
             },
             app.clone(),
             output,
@@ -578,6 +582,24 @@ pub fn custom_app_remove(
     id: String,
 ) -> Result<(), String> {
     launcher.remove_custom_app(&app, &id)
+}
+
+fn validate_launch_environment(environment: &BTreeMap<String, String>) -> Result<(), String> {
+    for (key, value) in environment {
+        if key.trim().is_empty()
+            || key
+                .chars()
+                .any(|character| character.is_control() || character == '=')
+        {
+            return Err("launch environment contains an invalid variable name".to_owned());
+        }
+        if value.chars().any(char::is_control) {
+            return Err(format!(
+                "launch environment value for {key} contains control characters"
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn resolve_catalog_profile(
@@ -1046,6 +1068,21 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec!["pinned", "new", "recent"]
         );
+    }
+
+    #[test]
+    fn launch_environment_accepts_scoped_context_and_rejects_control_data() {
+        let valid = BTreeMap::from([
+            ("ARKONAD_AGENT_MODE".to_owned(), "task".to_owned()),
+            ("ARKONAD_AGENT_PERMISSION".to_owned(), "ask".to_owned()),
+        ]);
+        assert!(validate_launch_environment(&valid).is_ok());
+
+        let invalid_name = BTreeMap::from([("BAD=NAME".to_owned(), "value".to_owned())]);
+        assert!(validate_launch_environment(&invalid_name).is_err());
+
+        let invalid_value = BTreeMap::from([("VALID_NAME".to_owned(), "bad\nvalue".to_owned())]);
+        assert!(validate_launch_environment(&invalid_value).is_err());
     }
 
     #[test]
