@@ -4,6 +4,7 @@ mod frame;
 mod installer;
 mod launcher;
 mod pty;
+mod task;
 mod workspace;
 
 use agent::AgentSupervisorRuntime;
@@ -12,6 +13,7 @@ use frame::FrameRuntime;
 use installer::InstallRuntime;
 use launcher::LaunchRuntime;
 use pty::SessionManager;
+use task::AgentTaskRuntime;
 use workspace::WorkspaceRuntime;
 
 fn main() {
@@ -23,6 +25,7 @@ fn main() {
         .manage(LaunchRuntime::default())
         .manage(FrameRuntime::default())
         .manage(SessionManager::default())
+        .manage(AgentTaskRuntime::default())
         .manage(WorkspaceRuntime::default())
         .invoke_handler(tauri::generate_handler![
             agent::agent_supervision_snapshot,
@@ -66,6 +69,13 @@ fn main() {
             pty::write_session,
             pty::resize_session,
             pty::close_session,
+            task::agent_task_list,
+            task::agent_task_plan,
+            task::agent_task_create,
+            task::agent_task_claim,
+            task::agent_task_release,
+            task::agent_task_handoff,
+            task::agent_task_cancel,
             workspace::workspace_save,
             workspace::workspace_load,
             workspace::workspace_delete,

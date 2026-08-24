@@ -1445,7 +1445,8 @@ select {
 }
 
 .agent-task-field textarea,
-.agent-scope-select {
+.agent-scope-select,
+.task-plan-input {
   min-width: 0;
   padding: 7px;
   border: 1px solid #303b45;
@@ -1461,7 +1462,8 @@ select {
 }
 
 .agent-task-field textarea:focus,
-.agent-scope-select:focus {
+.agent-scope-select:focus,
+.task-plan-input:focus {
   border-color: #ff9c4a;
   box-shadow: 0 0 0 1px rgba(255, 156, 74, 0.15);
 }
@@ -1540,6 +1542,43 @@ select {
 .agent-start-button:disabled {
   cursor: wait;
   opacity: 0.55;
+}
+
+.task-plan-evidence {
+  max-height: 120px;
+  margin: 8px 0 0;
+  padding: 8px;
+  overflow: auto;
+  border-left: 2px solid #ffcf70;
+  background: #0c1014;
+  color: #ffcf70;
+  font: inherit;
+  font-size: 10px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.task-plan-list {
+  display: grid;
+  gap: 5px;
+  margin: 7px 0 0;
+  padding-left: 18px;
+  color: #ffcf70;
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.task-plan-list + strong {
+  display: block;
+  margin-top: 12px;
+  color: #e8ecef;
+  font-size: 10px;
+  text-transform: uppercase;
+}
+
+.agent-task-center .store-row-summary {
+  overflow-wrap: anywhere;
 }
 
 .store-row-state.status-warning {
