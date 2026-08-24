@@ -227,6 +227,8 @@ type AgentLaunchContext = {
   task: string;
   policy: AgentPolicy;
   workspaceRoot: string | null;
+  agentTaskId?: string;
+  agentTaskWorktreePath?: string;
 };
 
 type AgentSessionState =
@@ -300,6 +302,84 @@ type AgentSupervisionSnapshot = {
 type AgentFollowUpResult = {
   followUp: AgentFollowUp;
   session: AgentSessionRecord;
+};
+
+type AgentTaskStatus =
+  | "preparing"
+  | "ready"
+  | "active"
+  | "handoffReady"
+  | "setupFailed"
+  | "cancelled"
+  | "cancelledPreserved";
+type WorktreeLeaseStatus = "reserved" | "active";
+
+type WorktreeLease = {
+  ownerId: string;
+  agentId: string;
+  sessionId: string | null;
+  status: WorktreeLeaseStatus;
+  acquiredAt: string;
+};
+
+type ControlHandoff = {
+  id: string;
+  previousOwner: string;
+  newOwner: string;
+  newOwnerName: string;
+  branch: string;
+  worktreePath: string;
+  changes: string;
+  checks: string;
+  pendingDecisions: string;
+  createdAt: string;
+};
+
+type AgentTask = {
+  id: string;
+  status: AgentTaskStatus;
+  repositoryRoot: string;
+  baseBranch: string;
+  taskBranch: string;
+  worktreeRoot: string;
+  worktreePath: string;
+  taskSummary: string;
+  agentId: string;
+  agentName: string;
+  permissionMode: AgentPermissionMode;
+  lease: WorktreeLease | null;
+  handoffs: ControlHandoff[];
+  failureMessage: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+type AgentTaskPlan = {
+  repositoryRoot: string | null;
+  repositoryName: string | null;
+  baseBranch: string | null;
+  taskBranch: string | null;
+  worktreeRoot: string | null;
+  worktreePath: string | null;
+  taskSummary: string;
+  agentId: string;
+  agentName: string;
+  permissionMode: AgentPermissionMode;
+  repositoryStatus: "clean" | "dirty" | "unknown";
+  repositoryStatusDetail: string;
+  freeSpaceBytes: number | null;
+  freeSpaceOk: boolean;
+  canCreate: boolean;
+  blockers: string[];
+  recoveryOptions: string[];
+};
+
+type AgentTaskCancelResult = {
+  task: AgentTask;
+  action: string;
+  removedWorktree: boolean;
+  preservedWorktree: boolean;
+  message: string;
 };
 
 type LaunchpadEntry = {
@@ -673,6 +753,9 @@ app.innerHTML = `
       <button class="topbar-action" type="button" data-agents-open aria-expanded="false">
         Agents <span class="key-hint">palette</span>
       </button>
+      <button class="topbar-action" type="button" data-tasks-open aria-expanded="false">
+        Tasks <span class="key-hint">palette</span>
+      </button>
       <button class="topbar-action" type="button" data-attention-open aria-expanded="false">
         Attention <span class="attention-badge" data-attention-badge hidden aria-live="polite"></span>
         <span class="key-hint">palette</span>
@@ -961,12 +1044,46 @@ app.innerHTML = `
           <span>Esc terminal</span>
         </div>
       </section>
+      <section class="store-shell agent-task-center" data-tasks-view hidden aria-label="Agent Tasks">
+        <div class="store-toolbar">
+          <div class="store-heading">
+            <span class="store-eyebrow">AGENT TASKS</span>
+            <span class="store-title">Isolated Worktrees, writers, and explicit handoffs</span>
+          </div>
+          <label class="store-control">
+            <span>Search</span>
+            <input data-tasks-search type="search" placeholder="task, branch, repository, owner" autocomplete="off" />
+          </label>
+          <button class="store-close" type="button" data-tasks-close>Esc · terminal</button>
+        </div>
+        <div class="store-notice" data-tasks-notice>
+          One Worktree Lease can be active at a time. Cancellation preserves changed Worktrees.
+        </div>
+        <div class="store-content">
+          <section class="store-list-panel" aria-label="Agent Tasks">
+            <div class="store-list-header">
+              <span>Tasks</span>
+              <span data-tasks-count>loading…</span>
+            </div>
+            <div class="store-list" data-tasks-list role="listbox" aria-label="Agent Tasks"></div>
+            <div class="store-error" data-tasks-error hidden></div>
+          </section>
+          <article class="store-detail" data-tasks-detail aria-live="polite"></article>
+        </div>
+        <div class="store-footer">
+          <span>↑↓ choose task</span>
+          <span>Enter inspect</span>
+          <span>Lease is explicit</span>
+          <span>Esc terminal</span>
+        </div>
+      </section>
     </main>
     <footer class="bottombar">
       <span>Leader opens commands</span>
       <span>Palette: Launch App</span>
       <span>Palette: Store</span>
       <span>Palette: My Apps</span>
+      <span>Palette: Agent Tasks</span>
       <span>Palette: Attention</span>
       <span>Palette: New Tab</span>
       <span>Palette: Split</span>
@@ -996,6 +1113,7 @@ const launchpadOpenButton = app.querySelector<HTMLButtonElement>("[data-launchpa
 const storeOpenButton = app.querySelector<HTMLButtonElement>("[data-store-open]")!;
 const appsOpenButton = app.querySelector<HTMLButtonElement>("[data-apps-open]")!;
 const agentsOpenButton = app.querySelector<HTMLButtonElement>("[data-agents-open]")!;
+const tasksOpenButton = app.querySelector<HTMLButtonElement>("[data-tasks-open]")!;
 const attentionOpenButton = app.querySelector<HTMLButtonElement>("[data-attention-open]")!;
 const attentionBadge = app.querySelector<HTMLSpanElement>("[data-attention-badge]")!;
 const appsUpdateBadge = app.querySelector<HTMLSpanElement>("[data-apps-update-badge]")!;
@@ -1032,6 +1150,14 @@ const agentCount = app.querySelector<HTMLSpanElement>("[data-agent-count]")!;
 const agentList = app.querySelector<HTMLDivElement>("[data-agent-list]")!;
 const agentError = app.querySelector<HTMLDivElement>("[data-agent-error]")!;
 const agentDetail = app.querySelector<HTMLElement>("[data-agent-detail]")!;
+const tasksView = app.querySelector<HTMLElement>("[data-tasks-view]")!;
+const tasksCloseButton = app.querySelector<HTMLButtonElement>("[data-tasks-close]")!;
+const tasksSearch = app.querySelector<HTMLInputElement>("[data-tasks-search]")!;
+const tasksNotice = app.querySelector<HTMLDivElement>("[data-tasks-notice]")!;
+const tasksCount = app.querySelector<HTMLSpanElement>("[data-tasks-count]")!;
+const tasksList = app.querySelector<HTMLDivElement>("[data-tasks-list]")!;
+const tasksError = app.querySelector<HTMLDivElement>("[data-tasks-error]")!;
+const tasksDetail = app.querySelector<HTMLElement>("[data-tasks-detail]")!;
 const attentionView = app.querySelector<HTMLElement>("[data-attention-view]")!;
 const attentionCloseButton = app.querySelector<HTMLButtonElement>("[data-attention-close]")!;
 const attentionSearch = app.querySelector<HTMLInputElement>("[data-attention-search]")!;
@@ -1069,6 +1195,7 @@ if (
   !storeOpenButton ||
   !appsOpenButton ||
   !agentsOpenButton ||
+  !tasksOpenButton ||
   !attentionOpenButton ||
   !attentionBadge ||
   !appsUpdateBadge ||
@@ -1105,6 +1232,14 @@ if (
   !agentList ||
   !agentError ||
   !agentDetail ||
+  !tasksView ||
+  !tasksCloseButton ||
+  !tasksSearch ||
+  !tasksNotice ||
+  !tasksCount ||
+  !tasksList ||
+  !tasksError ||
+  !tasksDetail ||
   !attentionView ||
   !attentionCloseButton ||
   !attentionSearch ||
@@ -1142,7 +1277,7 @@ let resizeTimer: number | undefined;
 let terminalStatusText = "connecting";
 let terminalStatusState = "";
 let storeOpen = false;
-let activeSurface: "launchpad" | "store" | "apps" | "agents" | "attention" = "launchpad";
+let activeSurface: "launchpad" | "store" | "apps" | "agents" | "tasks" | "attention" = "launchpad";
 let launchpadEntries: LaunchpadEntry[] = [];
 let selectedLaunchpadId: string | undefined;
 let launchpadRequestId = 0;
@@ -1168,6 +1303,15 @@ let agentDraftTask = "";
 let agentDraftPermission: AgentPermissionMode = "ask";
 let agentDraftFollowUp: AgentFollowUpMode = "queue";
 let agentDraftScope: AgentPolicyScope = "workspace";
+let agentTaskPlan: AgentTaskPlan | undefined;
+let agentTasks: AgentTask[] = [];
+let selectedTaskId: string | undefined;
+let taskRequestId = 0;
+let taskPlanRequestId = 0;
+let taskDraftBaseBranch = "";
+let taskDraftBranch = "";
+let taskDraftWorktreeRoot = "";
+let taskDraftEntryId: string | undefined;
 let agentSupervision: AgentSupervisionSnapshot = { sessions: [], adapters: [] };
 let selectedSupervisionId: string | undefined;
 let attentionRequestId = 0;
@@ -1298,6 +1442,7 @@ function setTopbarActionsDisabled(disabled: boolean): void {
   storeOpenButton.disabled = disabled;
   appsOpenButton.disabled = disabled;
   agentsOpenButton.disabled = disabled;
+  tasksOpenButton.disabled = disabled;
   attentionOpenButton.disabled = disabled;
 }
 
@@ -1399,6 +1544,7 @@ function openOnboarding(): void {
   storeView.hidden = true;
   appsView.hidden = true;
   agentsView.hidden = true;
+  tasksView.hidden = true;
   attentionView.hidden = true;
   storeOpen = false;
   setTopbarActionsDisabled(true);
@@ -1906,6 +2052,15 @@ function frameCommands(): FrameCommand[] {
       run: () => closeActiveTab(pendingClose === "tab"),
     },
     {
+      id: "tasks",
+      label: "Agents · Agent Tasks",
+      description: "Review isolated Worktrees, active writers, and explicit handoffs.",
+      run: () => {
+        closeCommandOverlay();
+        openAgentTasks();
+      },
+    },
+    {
       id: "attention",
       label: "Agents · Attention Queue",
       description: "Review approvals, questions, failures, completion, and pending follow-ups.",
@@ -2194,6 +2349,7 @@ function openWorkspaceRecovery(document: WorkspaceDocument, message: string): vo
   storeView.hidden = true;
   appsView.hidden = true;
   agentsView.hidden = true;
+  tasksView.hidden = true;
   attentionView.hidden = true;
   commandOverlay.hidden = true;
   commandOverlayOpen = false;
@@ -2202,6 +2358,7 @@ function openWorkspaceRecovery(document: WorkspaceDocument, message: string): vo
   storeOpenButton.setAttribute("aria-expanded", "false");
   appsOpenButton.setAttribute("aria-expanded", "false");
   agentsOpenButton.setAttribute("aria-expanded", "false");
+  tasksOpenButton.setAttribute("aria-expanded", "false");
   attentionOpenButton.setAttribute("aria-expanded", "false");
   workspaceRecoveryMessage.textContent = message;
   renderWorkspaceRecovery();
@@ -2820,6 +2977,11 @@ function resetAgentDraft(agentId: string): void {
   agentDraftScope = sessionAgentOverrides.has(agentId) ? "session" : "workspace";
   agentDraftTask = "";
   agentMode = "task";
+  agentTaskPlan = undefined;
+  taskDraftBaseBranch = "";
+  taskDraftBranch = "";
+  taskDraftWorktreeRoot = "";
+  taskDraftEntryId = undefined;
 }
 
 function renderAgentPolicySummary(
@@ -3149,6 +3311,9 @@ async function refreshAgents(): Promise<void> {
       });
     agentNotice.textContent = "Installed and launchable agents appear first. Store links do not install anything by themselves.";
     renderAgentList();
+    if (activeSurface === "tasks") {
+      renderAgentTaskCenter();
+    }
   } catch (error) {
     if (requestId !== agentRequestId) {
       return;
@@ -3179,11 +3344,13 @@ function openAgentCockpit(): void {
   storeView.hidden = true;
   appsView.hidden = true;
   agentsView.hidden = false;
+  tasksView.hidden = true;
   attentionView.hidden = true;
   launchpadOpenButton.setAttribute("aria-expanded", "false");
   storeOpenButton.setAttribute("aria-expanded", "false");
   appsOpenButton.setAttribute("aria-expanded", "false");
   agentsOpenButton.setAttribute("aria-expanded", "true");
+  tasksOpenButton.setAttribute("aria-expanded", "false");
   attentionOpenButton.setAttribute("aria-expanded", "false");
   sessionMeta.textContent = "agent cockpit";
   status.textContent = "agents";
@@ -3205,6 +3372,10 @@ async function startAgent(entry: AgentEntry): Promise<void> {
   } else {
     sessionAgentOverrides.set(entry.id, policy);
   }
+  if (agentMode === "task") {
+    await openAgentTaskPlan(entry);
+    return;
+  }
   const context: AgentLaunchContext = {
     mode: agentMode,
     task: agentDraftTask.trim(),
@@ -3220,6 +3391,227 @@ async function startAgent(entry: AgentEntry): Promise<void> {
       supportsWorkingDirectory: true,
     },
     { kind: "currentDirectory" },
+    context,
+  );
+}
+
+function taskRepositoryContext(): string {
+  return focusedPane()?.session.cwd
+    ?? pendingWorkspace?.repositoryRoot
+    ?? pendingWorkspace?.root
+    ?? "";
+}
+
+function taskRequestFor(
+  entry: AgentEntry,
+  values: { baseBranch?: string; taskBranch?: string; worktreeRoot?: string } = {},
+): Record<string, unknown> {
+  return {
+    repositoryRoot: taskRepositoryContext(),
+    taskSummary: agentDraftTask.trim(),
+    baseBranch: values.baseBranch?.trim() || taskDraftBaseBranch.trim() || null,
+    taskBranch: values.taskBranch?.trim() || taskDraftBranch.trim() || null,
+    worktreeRoot: values.worktreeRoot?.trim() || taskDraftWorktreeRoot.trim() || null,
+    agentId: entry.id,
+    agentName: entry.name,
+    permissionMode: agentDraftPermission,
+  };
+}
+
+async function openAgentTaskPlan(entry: AgentEntry): Promise<void> {
+  if (!agentDraftTask.trim()) {
+    agentNotice.textContent = "Add a short task before opening Agent Task setup.";
+    return;
+  }
+  taskDraftEntryId = entry.id;
+  agentTaskPlan = undefined;
+  renderAgentTaskPlan(entry);
+  await refreshAgentTaskPlan(entry);
+}
+
+async function refreshAgentTaskPlan(
+  entry: AgentEntry,
+  values: { baseBranch?: string; taskBranch?: string; worktreeRoot?: string } = {},
+): Promise<void> {
+  const requestId = ++taskPlanRequestId;
+  tasksNotice.textContent = "Checking repository, branch, Worktree path, and free space…";
+  try {
+    const plan = await invoke<AgentTaskPlan>("agent_task_plan", {
+      request: taskRequestFor(entry, values),
+    });
+    if (requestId !== taskPlanRequestId) {
+      return;
+    }
+    agentTaskPlan = plan;
+    taskDraftBaseBranch = plan.baseBranch ?? values.baseBranch ?? "";
+    taskDraftBranch = plan.taskBranch ?? values.taskBranch ?? "";
+    taskDraftWorktreeRoot = plan.worktreeRoot ?? values.worktreeRoot ?? "";
+    renderAgentTaskPlan(entry);
+  } catch (error) {
+    if (requestId !== taskPlanRequestId) {
+      return;
+    }
+    agentNotice.textContent = `Could not inspect the Agent Task setup: ${String(error)}`;
+    renderAgentDetail(entry);
+  }
+}
+
+function renderAgentTaskPlan(entry: AgentEntry): void {
+  agentDetail.replaceChildren();
+  const plan = agentTaskPlan;
+  const header = makeElement("header", "detail-header");
+  header.append(
+    makeElement("span", "detail-category", "agent task setup"),
+    makeElement("h2", "detail-title", entry.name),
+    makeElement("p", "detail-summary", agentDraftTask.trim()),
+    makeElement("p", "detail-meta", "Review the exact repository and Worktree before creation."),
+  );
+  agentDetail.append(header);
+
+  if (!plan) {
+    agentDetail.append(makeElement("p", "detail-note", "Reading the current Repository Context…"));
+    return;
+  }
+
+  const details = appendDetailSection(agentDetail, "Creation preview");
+  appendDetailLine(details, "Repository", plan.repositoryRoot ?? "unknown");
+  appendDetailLine(details, "Repository status", plan.repositoryStatus);
+  appendDetailLine(details, "Base branch", plan.baseBranch ?? "not resolved");
+  appendDetailLine(details, "Task branch", plan.taskBranch ?? "not resolved");
+  appendDetailLine(details, "Worktree root", plan.worktreeRoot ?? "not resolved");
+  appendDetailLine(details, "Worktree path", plan.worktreePath ?? "not resolved");
+  appendDetailLine(details, "Agent", `${entry.name} · ${agentPermissionLabel(agentDraftPermission)}`);
+  if (plan.freeSpaceBytes !== null) {
+    appendDetailLine(details, "Free space", `${formatTaskBytes(plan.freeSpaceBytes)}${plan.freeSpaceOk ? " · enough" : " · too low"}`);
+  } else {
+    appendDetailLine(details, "Free space", "not measured");
+  }
+  if (plan.repositoryStatusDetail) {
+    details.append(makeElement("pre", "task-plan-evidence", plan.repositoryStatusDetail));
+  }
+
+  const fields = appendDetailSection(agentDetail, "Editable setup");
+  const baseInput = taskPlanInput(fields, "Base branch", taskDraftBaseBranch, "main or another existing branch");
+  const branchInput = taskPlanInput(fields, "Task branch", taskDraftBranch, "codex/arkonad/task-name");
+  const rootInput = taskPlanInput(fields, "Worktree root", taskDraftWorktreeRoot, "absolute path outside the canonical checkout");
+  baseInput.addEventListener("input", () => {
+    taskDraftBaseBranch = baseInput.value;
+  });
+  branchInput.addEventListener("input", () => {
+    taskDraftBranch = branchInput.value;
+  });
+  rootInput.addEventListener("input", () => {
+    taskDraftWorktreeRoot = rootInput.value;
+  });
+
+  if (plan.blockers.length > 0) {
+    const blockerSection = appendDetailSection(agentDetail, "Setup stopped");
+    const list = makeElement("ul", "task-plan-list");
+    for (const blocker of plan.blockers) {
+      list.append(makeElement("li", undefined, blocker));
+    }
+    blockerSection.append(list);
+    if (plan.recoveryOptions.length > 0) {
+      blockerSection.append(makeElement("strong", undefined, "Recovery choices"));
+      const recovery = makeElement("ul", "task-plan-list");
+      for (const option of plan.recoveryOptions) {
+        recovery.append(makeElement("li", undefined, option));
+      }
+      blockerSection.append(recovery);
+    }
+  }
+
+  const actions = makeElement("div", "install-button-row");
+  const back = makeElement("button", "detail-action", "Back to agent") as HTMLButtonElement;
+  back.type = "button";
+  back.addEventListener("click", () => renderAgentDetail(entry));
+  const recheck = makeElement("button", "detail-action", "Recheck plan") as HTMLButtonElement;
+  recheck.type = "button";
+  recheck.addEventListener("click", () => {
+    void refreshAgentTaskPlan(entry, {
+      baseBranch: baseInput.value,
+      taskBranch: branchInput.value,
+      worktreeRoot: rootInput.value,
+    });
+  });
+  actions.append(back, recheck);
+  if (plan.canCreate) {
+    const create = makeElement("button", "agent-start-button", "Create Worktree and Start") as HTMLButtonElement;
+    create.type = "button";
+    create.disabled = launchBusy;
+    create.addEventListener("click", () => void createAndStartAgentTask(entry, {
+      baseBranch: baseInput.value,
+      taskBranch: branchInput.value,
+      worktreeRoot: rootInput.value,
+    }));
+    actions.append(create);
+  }
+  agentDetail.append(actions);
+}
+
+function taskPlanInput(
+  parent: HTMLElement,
+  label: string,
+  value: string,
+  placeholder: string,
+): HTMLInputElement {
+  const wrapper = makeElement("label", "agent-scope-field");
+  wrapper.append(makeElement("span", undefined, label));
+  const input = makeElement("input", "task-plan-input") as HTMLInputElement;
+  input.type = "text";
+  input.value = value;
+  input.placeholder = placeholder;
+  input.required = true;
+  wrapper.append(input);
+  parent.append(wrapper);
+  return input;
+}
+
+function formatTaskBytes(value: number): string {
+  if (value >= 1024 * 1024 * 1024) {
+    return `${(value / (1024 * 1024 * 1024)).toFixed(1)} GiB`;
+  }
+  return `${Math.round(value / (1024 * 1024))} MiB`;
+}
+
+async function createAndStartAgentTask(
+  entry: AgentEntry,
+  values: { baseBranch: string; taskBranch: string; worktreeRoot: string },
+): Promise<void> {
+  try {
+    const task = await invoke<AgentTask>("agent_task_create", {
+      request: taskRequestFor(entry, values),
+    });
+    replaceAgentTask(task);
+    await startAgentForTask(task, entry);
+  } catch (error) {
+    const message = `Agent Task setup stopped: ${String(error)}`;
+    agentNotice.textContent = message;
+    tasksNotice.textContent = message;
+    await refreshAgentTasks();
+    openAgentTasks();
+  }
+}
+
+async function startAgentForTask(task: AgentTask, entry: AgentEntry): Promise<void> {
+  const policy = effectiveAgentPolicy(entry.id);
+  const context: AgentLaunchContext = {
+    mode: "task",
+    task: task.taskSummary,
+    policy,
+    workspaceRoot: task.worktreePath,
+    agentTaskId: task.id,
+    agentTaskWorktreePath: task.worktreePath,
+  };
+  await launchTarget(
+    {
+      id: entry.id,
+      name: entry.name,
+      profileId: entry.profileId,
+      executablePath: entry.executablePath,
+      supportsWorkingDirectory: true,
+    },
+    { kind: "directory", path: task.worktreePath },
     context,
   );
 }
@@ -3560,6 +3952,356 @@ async function refreshAgentSupervision(): Promise<void> {
   }
 }
 
+function taskStatusLabel(status: AgentTaskStatus): string {
+  return {
+    preparing: "Preparing Worktree",
+    ready: "Ready for writer",
+    active: "Active writer",
+    handoffReady: "Handoff ready",
+    setupFailed: "Setup failed",
+    cancelled: "Cancelled · Worktree removed",
+    cancelledPreserved: "Cancelled · Worktree preserved",
+  }[status];
+}
+
+function replaceAgentTask(task: AgentTask): void {
+  const index = agentTasks.findIndex((item) => item.id === task.id);
+  if (index >= 0) {
+    agentTasks[index] = task;
+  } else {
+    agentTasks.push(task);
+  }
+  if (activeSurface === "tasks") {
+    renderAgentTaskCenter();
+  }
+}
+
+function taskSearchText(task: AgentTask): string {
+  const handoff = task.handoffs.at(-1);
+  return [
+    task.id,
+    task.taskSummary,
+    task.repositoryRoot,
+    task.baseBranch,
+    task.taskBranch,
+    task.worktreePath,
+    task.agentName,
+    task.agentId,
+    taskStatusLabel(task.status),
+    task.lease?.ownerId ?? "",
+    handoff?.newOwnerName ?? "",
+  ]
+    .join(" ")
+    .toLowerCase();
+}
+
+function visibleAgentTasks(): AgentTask[] {
+  const query = tasksSearch.value.trim().toLowerCase();
+  return agentTasks
+    .filter((task) => !query || taskSearchText(task).includes(query))
+    .sort((left, right) => {
+      const rank = (task: AgentTask) => {
+        if (task.status === "active") return 0;
+        if (task.status === "handoffReady") return 1;
+        if (task.status === "preparing" || task.status === "setupFailed") return 2;
+        if (task.status === "ready") return 3;
+        return 4;
+      };
+      return rank(left) - rank(right) || Number(right.updatedAt) - Number(left.updatedAt);
+    });
+}
+
+async function refreshAgentTasks(): Promise<void> {
+  const requestId = ++taskRequestId;
+  tasksError.hidden = true;
+  try {
+    const tasks = await invoke<AgentTask[]>("agent_task_list");
+    if (requestId !== taskRequestId) {
+      return;
+    }
+    agentTasks = tasks;
+    renderAgentTaskCenter();
+  } catch (error) {
+    if (requestId !== taskRequestId) {
+      return;
+    }
+    tasksError.hidden = false;
+    tasksError.textContent = `Could not read Agent Tasks: ${String(error)}`;
+  }
+}
+
+function openAgentTasks(): void {
+  if (storeOpen && activeSurface === "tasks") {
+    tasksSearch.focus();
+    return;
+  }
+  storeOpen = true;
+  activeSurface = "tasks";
+  terminalShell.hidden = true;
+  launchpadView.hidden = true;
+  storeView.hidden = true;
+  appsView.hidden = true;
+  agentsView.hidden = true;
+  tasksView.hidden = false;
+  attentionView.hidden = true;
+  launchpadOpenButton.setAttribute("aria-expanded", "false");
+  storeOpenButton.setAttribute("aria-expanded", "false");
+  appsOpenButton.setAttribute("aria-expanded", "false");
+  agentsOpenButton.setAttribute("aria-expanded", "false");
+  tasksOpenButton.setAttribute("aria-expanded", "true");
+  attentionOpenButton.setAttribute("aria-expanded", "false");
+  sessionMeta.textContent = "agent tasks";
+  status.textContent = "tasks";
+  status.dataset.state = "ready";
+  void refreshAgentTasks();
+  void refreshAgents();
+  window.requestAnimationFrame(() => tasksSearch.focus());
+}
+
+function renderAgentTaskCenter(): void {
+  const tasks = visibleAgentTasks();
+  tasksList.replaceChildren();
+  tasksCount.textContent = `${tasks.length} shown · ${agentTasks.length} saved`;
+  if (tasks.length === 0) {
+    selectedTaskId = undefined;
+    tasksList.append(makeElement("div", "store-empty-list", "No Agent Tasks match this search."));
+    renderAgentTaskDetail(undefined);
+    return;
+  }
+  if (!tasks.some((task) => task.id === selectedTaskId)) {
+    selectedTaskId = tasks[0].id;
+  }
+  for (const task of tasks) {
+    const selected = task.id === selectedTaskId;
+    const row = makeElement("button", "store-row") as HTMLButtonElement;
+    row.type = "button";
+    row.dataset.taskId = task.id;
+    row.setAttribute("role", "option");
+    row.setAttribute("aria-selected", String(selected));
+    row.classList.toggle("is-selected", selected);
+    const top = makeElement("span", "store-row-top");
+    top.append(
+      makeElement("strong", undefined, task.taskSummary || "Untitled Agent Task"),
+      makeElement("span", "store-row-category", task.agentName),
+    );
+    row.append(
+      top,
+      makeElement("span", "store-row-summary", `${task.taskBranch} · ${task.worktreePath}`),
+      makeElement(
+        "span",
+        `store-row-state ${task.status === "active" ? "status-active" : task.status === "setupFailed" ? "status-error" : task.status === "handoffReady" ? "status-warning" : "status-unknown"}`,
+        taskStatusLabel(task.status),
+      ),
+    );
+    row.addEventListener("click", () => selectAgentTask(task.id));
+    tasksList.append(row);
+  }
+  renderAgentTaskDetail(tasks.find((task) => task.id === selectedTaskId));
+}
+
+function renderAgentTaskDetail(task: AgentTask | undefined): void {
+  tasksDetail.replaceChildren();
+  if (!task) {
+    tasksDetail.append(makeElement("div", "store-empty-detail", "Select an Agent Task to inspect its lease and recovery choices."));
+    return;
+  }
+  const header = makeElement("header", "detail-header");
+  header.append(
+    makeElement("span", "detail-category", "agent task"),
+    makeElement("h2", "detail-title", task.taskSummary || "Untitled Agent Task"),
+    makeElement("p", "detail-summary", taskStatusLabel(task.status)),
+    makeElement("p", "detail-meta", `${task.agentName} · ${task.permissionMode}`),
+  );
+  tasksDetail.append(header);
+
+  const context = appendDetailSection(tasksDetail, "Task context");
+  appendDetailLine(context, "Repository", task.repositoryRoot);
+  appendDetailLine(context, "Base branch", task.baseBranch);
+  appendDetailLine(context, "Task branch", task.taskBranch);
+  appendDetailLine(context, "Worktree root", task.worktreeRoot);
+  appendDetailLine(context, "Worktree path", task.worktreePath);
+  appendDetailLine(context, "Permission mode", agentPermissionLabel(task.permissionMode));
+  appendDetailLine(context, "Agent", task.agentName);
+
+  const leaseSection = appendDetailSection(tasksDetail, "Worktree Lease");
+  if (task.lease) {
+    appendDetailLine(leaseSection, "Owner", task.lease.ownerId);
+    appendDetailLine(leaseSection, "Lease state", task.lease.status);
+    appendDetailLine(leaseSection, "Session", task.lease.sessionId ?? "reserved before launch");
+    leaseSection.append(
+      makeElement(
+        "p",
+        "detail-note",
+        task.lease.status === "active"
+          ? "Only this writer may edit the Agent Worktree. A second agent cannot silently take the lease."
+          : "The Worktree is reserved while the selected agent launch is being completed.",
+      ),
+    );
+    const release = makeElement("button", "detail-action", task.lease.status === "active" ? "Release writer lease" : "Release reservation") as HTMLButtonElement;
+    release.type = "button";
+    release.addEventListener("click", () => void releaseAgentTask(task));
+    leaseSection.append(release);
+  } else {
+    leaseSection.append(makeElement("p", "detail-empty", task.status === "handoffReady" ? "No writer is active. The latest handoff names the only owner who may claim it." : "No writer currently holds this Worktree."));
+  }
+
+  if (task.status === "ready") {
+    const retryAgent = agentEntries.find((entry) => entry.id === task.agentId && entry.launchable);
+    if (retryAgent) {
+      const retry = makeElement("button", "agent-start-button", `Start ${retryAgent.name} in Worktree`) as HTMLButtonElement;
+      retry.type = "button";
+      retry.addEventListener("click", () => void startAgentForTask(task, retryAgent));
+      tasksDetail.append(retry);
+    }
+  }
+
+  if (task.failureMessage) {
+    const failure = appendDetailSection(tasksDetail, "Setup failure");
+    failure.append(makeElement("p", "task-plan-evidence", task.failureMessage));
+  }
+
+  const latestHandoff = task.handoffs.at(-1);
+  if (latestHandoff) {
+    const handoffSection = appendDetailSection(tasksDetail, "Latest Control Handoff");
+    appendDetailLine(handoffSection, "From", latestHandoff.previousOwner);
+    appendDetailLine(handoffSection, "To", `${latestHandoff.newOwnerName} (${latestHandoff.newOwner})`);
+    appendDetailLine(handoffSection, "Branch", latestHandoff.branch);
+    appendDetailLine(handoffSection, "Worktree", latestHandoff.worktreePath);
+    appendDetailLine(handoffSection, "Changes", latestHandoff.changes);
+    appendDetailLine(handoffSection, "Checks", latestHandoff.checks);
+    appendDetailLine(handoffSection, "Pending decisions", latestHandoff.pendingDecisions);
+    const receiver = agentEntries.find((entry) => entry.id === latestHandoff.newOwner && entry.launchable);
+    if (task.status === "handoffReady" && receiver) {
+      const receive = makeElement("button", "agent-start-button", `Receive with ${receiver.name}`) as HTMLButtonElement;
+      receive.type = "button";
+      receive.addEventListener("click", () => void startAgentForTask(task, receiver));
+      handoffSection.append(receive);
+    }
+  }
+
+  if (task.lease?.status === "active") {
+    const handoffSection = appendDetailSection(tasksDetail, "Record explicit handoff");
+    const ownerOptions = agentEntries.filter((entry) => entry.launchable && entry.id !== task.agentId);
+    const ownerSelect = makeElement("select", "agent-scope-select") as HTMLSelectElement;
+    ownerSelect.setAttribute("aria-label", "New handoff owner");
+    for (const entry of ownerOptions) {
+      const option = makeElement("option", undefined, entry.name) as HTMLOptionElement;
+      option.value = entry.id;
+      ownerSelect.append(option);
+    }
+    if (ownerOptions.length === 0) {
+      const option = makeElement("option", undefined, "No other launchable agent detected") as HTMLOptionElement;
+      option.value = "";
+      ownerSelect.append(option);
+    }
+    const ownerLabel = makeElement("label", "agent-scope-field");
+    ownerLabel.append(makeElement("span", undefined, "New owner"), ownerSelect);
+    const changes = taskHandoffTextarea(handoffSection, "Changes", "Files, commits, or unfinished work");
+    const checks = taskHandoffTextarea(handoffSection, "Checks", "Tests or checks already run");
+    const decisions = taskHandoffTextarea(handoffSection, "Pending decisions", "Choices the next owner must make");
+    const submit = makeElement("button", "detail-action", "Record handoff") as HTMLButtonElement;
+    submit.type = "button";
+    submit.disabled = ownerOptions.length === 0;
+    submit.addEventListener("click", () => void submitTaskHandoff(task, ownerSelect.value, ownerSelect.selectedOptions[0]?.textContent ?? ownerSelect.value, changes.value, checks.value, decisions.value));
+    handoffSection.prepend(ownerLabel);
+    handoffSection.append(submit);
+    handoffSection.append(makeElement("p", "detail-note", "The active Session must be stopped first. Arkonad refuses to transfer a live writer."));
+  }
+
+  if (!task.status.toLowerCase().startsWith("cancelled")) {
+    const cancel = makeElement("button", "detail-action", "Cancel Task") as HTMLButtonElement;
+    cancel.type = "button";
+    cancel.addEventListener("click", () => void cancelAgentTask(task));
+    tasksDetail.append(cancel);
+  }
+}
+
+function taskHandoffTextarea(parent: HTMLElement, label: string, placeholder: string): HTMLTextAreaElement {
+  const wrapper = makeElement("label", "agent-task-field");
+  wrapper.append(makeElement("span", undefined, label));
+  const input = makeElement("textarea") as HTMLTextAreaElement;
+  input.rows = 2;
+  input.placeholder = placeholder;
+  wrapper.append(input);
+  parent.append(wrapper);
+  return input;
+}
+
+function selectAgentTask(id: string, focusRow = false): void {
+  if (!agentTasks.some((task) => task.id === id)) {
+    return;
+  }
+  selectedTaskId = id;
+  renderAgentTaskCenter();
+  if (focusRow) {
+    window.requestAnimationFrame(() => tasksList.querySelector<HTMLButtonElement>(`[data-task-id="${id}"]`)?.focus());
+  }
+}
+
+function moveAgentTaskSelection(offset: number): void {
+  const tasks = visibleAgentTasks();
+  if (tasks.length === 0) {
+    return;
+  }
+  const currentIndex = Math.max(0, tasks.findIndex((task) => task.id === selectedTaskId));
+  selectAgentTask(tasks[(currentIndex + offset + tasks.length) % tasks.length].id, true);
+}
+
+async function releaseAgentTask(task: AgentTask): Promise<void> {
+  if (!task.lease) {
+    return;
+  }
+  try {
+    replaceAgentTask(await invoke<AgentTask>("agent_task_release", {
+      request: { taskId: task.id, ownerId: task.lease.ownerId },
+    }));
+    tasksNotice.textContent = "The Worktree Lease was released. No agent may write until a new explicit claim.";
+  } catch (error) {
+    tasksNotice.textContent = `Could not release the Worktree Lease: ${String(error)}`;
+  }
+}
+
+async function submitTaskHandoff(
+  task: AgentTask,
+  newOwner: string,
+  newOwnerName: string,
+  changes: string,
+  checks: string,
+  pendingDecisions: string,
+): Promise<void> {
+  if (!task.lease) {
+    return;
+  }
+  try {
+    replaceAgentTask(await invoke<AgentTask>("agent_task_handoff", {
+      request: {
+        taskId: task.id,
+        currentOwner: task.lease.ownerId,
+        newOwner,
+        newOwnerName,
+        changes,
+        checks,
+        pendingDecisions,
+      },
+    }));
+    tasksNotice.textContent = "Handoff recorded. The named owner must explicitly claim the Worktree before writing.";
+  } catch (error) {
+    tasksNotice.textContent = `Could not record the handoff: ${String(error)}`;
+  }
+}
+
+async function cancelAgentTask(task: AgentTask): Promise<void> {
+  try {
+    const result = await invoke<AgentTaskCancelResult>("agent_task_cancel", {
+      request: { taskId: task.id },
+    });
+    replaceAgentTask(result.task);
+    tasksNotice.textContent = result.message;
+  } catch (error) {
+    tasksNotice.textContent = `Could not cancel the Agent Task: ${String(error)}`;
+  }
+}
+
 function openAttentionQueue(): void {
   if (storeOpen && activeSurface === "attention") {
     attentionSearch.focus();
@@ -3572,11 +4314,13 @@ function openAttentionQueue(): void {
   storeView.hidden = true;
   appsView.hidden = true;
   agentsView.hidden = true;
+  tasksView.hidden = true;
   attentionView.hidden = false;
   launchpadOpenButton.setAttribute("aria-expanded", "false");
   storeOpenButton.setAttribute("aria-expanded", "false");
   appsOpenButton.setAttribute("aria-expanded", "false");
   agentsOpenButton.setAttribute("aria-expanded", "false");
+  tasksOpenButton.setAttribute("aria-expanded", "false");
   attentionOpenButton.setAttribute("aria-expanded", "true");
   sessionMeta.textContent = "attention queue";
   status.textContent = "attention";
@@ -3731,6 +4475,12 @@ function agentEnvironment(context: AgentLaunchContext): Record<string, string> {
   if (context.workspaceRoot) {
     environment.ARKONAD_WORKSPACE_ROOT = context.workspaceRoot;
   }
+  if (context.agentTaskId) {
+    environment.ARKONAD_AGENT_TASK_ID = context.agentTaskId;
+  }
+  if (context.agentTaskWorktreePath) {
+    environment.ARKONAD_AGENT_WORKTREE = context.agentTaskWorktreePath;
+  }
   return environment;
 }
 
@@ -3739,7 +4489,7 @@ function agentInitialPrompt(context: AgentLaunchContext): string {
     const question = context.task || "Open a read-only General Chat session.";
     return `${question}\n\nGeneral Chat boundary: do not change files, run mutating commands, install tools, commit, or push. If a write is requested, ask the user to promote this session to Agent Task first.`;
   }
-  return context.task;
+  return `${context.task}\n\nAgent Task boundary: work only in the assigned Agent Worktree. Do not edit another checkout or hand the Worktree to another writer without an explicit Arkonad handoff.`;
 }
 
 async function launchTarget(
@@ -3756,6 +4506,8 @@ async function launchTarget(
   const pendingOutput: Uint8Array[] = [];
   let outputSessionId: string | undefined;
   let sessionAccepted = false;
+  let taskClaimed = false;
+  let launchedSessionId: string | undefined;
   output.onmessage = (chunk) => {
     if (sessionAccepted && outputSessionId) {
       writeToPane(outputSessionId, chunk);
@@ -3775,11 +4527,25 @@ async function launchTarget(
       },
       onOutput: output,
     });
+    launchedSessionId = nextSession.id;
     outputSessionId = nextSession.id;
     const nextSnapshot = await invoke<FrameSnapshot>("frame_attach_session", {
       session: nextSession,
     });
     renderFrame(nextSnapshot);
+    if (context?.agentTaskId) {
+      const task = await invoke<AgentTask>("agent_task_claim", {
+        request: {
+          taskId: context.agentTaskId,
+          agentId: target.id,
+          agentName: target.name,
+          permissionMode: context.policy.permission,
+          sessionId: nextSession.id,
+        },
+      });
+      replaceAgentTask(task);
+      taskClaimed = true;
+    }
     let supervisionWarning = "";
     if (context) {
       try {
@@ -3845,6 +4611,20 @@ async function launchTarget(
       appsNotice.textContent = message;
     } else if (activeSurface === "agents") {
       agentNotice.textContent = message;
+    } else if (activeSurface === "tasks") {
+      tasksNotice.textContent = message;
+    }
+    if (context?.agentTaskId && !taskClaimed) {
+      if (launchedSessionId) {
+        await invoke("close_session", { id: launchedSessionId }).catch(() => {
+          // The launch failure remains visible in the task record for recovery.
+        });
+      }
+      await invoke("agent_task_release", {
+        request: { taskId: context.agentTaskId, ownerId: target.id },
+      }).catch(() => {
+        // The task remains reserved and visible for explicit recovery if release fails.
+      });
     }
   }
 }
@@ -4618,11 +5398,13 @@ function openLaunchpad(): void {
   storeView.hidden = true;
   appsView.hidden = true;
   agentsView.hidden = true;
+  tasksView.hidden = true;
   attentionView.hidden = true;
   launchpadOpenButton.setAttribute("aria-expanded", "true");
   storeOpenButton.setAttribute("aria-expanded", "false");
   appsOpenButton.setAttribute("aria-expanded", "false");
   agentsOpenButton.setAttribute("aria-expanded", "false");
+  tasksOpenButton.setAttribute("aria-expanded", "false");
   attentionOpenButton.setAttribute("aria-expanded", "false");
   sessionMeta.textContent = "launchpad";
   status.textContent = "launchpad";
@@ -5347,11 +6129,13 @@ function openStore(category?: CatalogCategory | "", focusId?: string): void {
   appsView.hidden = true;
   storeView.hidden = false;
   agentsView.hidden = true;
+  tasksView.hidden = true;
   attentionView.hidden = true;
   launchpadOpenButton.setAttribute("aria-expanded", "false");
   storeOpenButton.setAttribute("aria-expanded", "true");
   appsOpenButton.setAttribute("aria-expanded", "false");
   agentsOpenButton.setAttribute("aria-expanded", "false");
+  tasksOpenButton.setAttribute("aria-expanded", "false");
   attentionOpenButton.setAttribute("aria-expanded", "false");
   sessionMeta.textContent = "store browser";
   status.textContent = "store";
@@ -5373,11 +6157,13 @@ function openMyApps(): void {
   storeView.hidden = true;
   appsView.hidden = false;
   agentsView.hidden = true;
+  tasksView.hidden = true;
   attentionView.hidden = true;
   launchpadOpenButton.setAttribute("aria-expanded", "false");
   storeOpenButton.setAttribute("aria-expanded", "false");
   appsOpenButton.setAttribute("aria-expanded", "true");
   agentsOpenButton.setAttribute("aria-expanded", "false");
+  tasksOpenButton.setAttribute("aria-expanded", "false");
   attentionOpenButton.setAttribute("aria-expanded", "false");
   sessionMeta.textContent = "my apps";
   status.textContent = "my apps";
@@ -5400,12 +6186,14 @@ function closeSurface(): void {
   storeView.hidden = true;
   appsView.hidden = true;
   agentsView.hidden = true;
+  tasksView.hidden = true;
   attentionView.hidden = true;
   terminalShell.hidden = false;
   launchpadOpenButton.setAttribute("aria-expanded", "false");
   storeOpenButton.setAttribute("aria-expanded", "false");
   appsOpenButton.setAttribute("aria-expanded", "false");
   agentsOpenButton.setAttribute("aria-expanded", "false");
+  tasksOpenButton.setAttribute("aria-expanded", "false");
   attentionOpenButton.setAttribute("aria-expanded", "false");
   updateFocusedSession();
   renderTerminalStatus();
@@ -5424,11 +6212,13 @@ launchpadOpenButton.addEventListener("click", openLaunchpad);
 storeOpenButton.addEventListener("click", () => openStore());
 appsOpenButton.addEventListener("click", openMyApps);
 agentsOpenButton.addEventListener("click", openAgentCockpit);
+tasksOpenButton.addEventListener("click", openAgentTasks);
 attentionOpenButton.addEventListener("click", openAttentionQueue);
 launchpadCloseButton.addEventListener("click", closeSurface);
 storeCloseButton.addEventListener("click", closeSurface);
 appsCloseButton.addEventListener("click", closeSurface);
 agentsCloseButton.addEventListener("click", closeSurface);
+tasksCloseButton.addEventListener("click", closeSurface);
 attentionCloseButton.addEventListener("click", closeSurface);
 commandCloseButton.addEventListener("click", closeCommandOverlay);
 commandSearch.addEventListener("input", renderCommandList);
@@ -5493,6 +6283,7 @@ storeList.addEventListener("keydown", (event) => {
 });
 appsSearch.addEventListener("input", scheduleMyAppsRefresh);
 agentSearch.addEventListener("input", scheduleAgentRefresh);
+tasksSearch.addEventListener("input", renderAgentTaskCenter);
 attentionSearch.addEventListener("input", renderAttentionQueue);
 launchpadList.addEventListener("keydown", (event) => {
   if (event.key === "ArrowDown") {
@@ -5614,6 +6405,33 @@ attentionList.addEventListener("keydown", (event) => {
     const activeRow = event.target instanceof HTMLButtonElement ? event.target : undefined;
     if (activeRow?.dataset.supervisionId) {
       selectSupervisedSession(activeRow.dataset.supervisionId, true);
+    }
+  }
+});
+tasksList.addEventListener("keydown", (event) => {
+  if (event.key === "ArrowDown") {
+    event.preventDefault();
+    moveAgentTaskSelection(1);
+  } else if (event.key === "ArrowUp") {
+    event.preventDefault();
+    moveAgentTaskSelection(-1);
+  } else if (event.key === "Home") {
+    event.preventDefault();
+    const first = visibleAgentTasks()[0];
+    if (first) {
+      selectAgentTask(first.id, true);
+    }
+  } else if (event.key === "End") {
+    event.preventDefault();
+    const last = visibleAgentTasks().at(-1);
+    if (last) {
+      selectAgentTask(last.id, true);
+    }
+  } else if (event.key === "Enter") {
+    event.preventDefault();
+    const activeRow = event.target instanceof HTMLButtonElement ? event.target : undefined;
+    if (activeRow?.dataset.taskId) {
+      selectAgentTask(activeRow.dataset.taskId, true);
     }
   }
 });
