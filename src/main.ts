@@ -382,6 +382,168 @@ type AgentTaskCancelResult = {
   message: string;
 };
 
+type IntegrationStrategy = "mergeNoFf" | "cherryPick";
+type IntegrationStatus =
+  | "preparing"
+  | "ready"
+  | "conflicted"
+  | "previewing"
+  | "validated"
+  | "reworkRequested"
+  | "setupFailed"
+  | "published"
+  | "abandoned";
+type PreviewState = "starting" | "healthy" | "degraded" | "failed" | "stopped";
+
+type IntegrationCommit = {
+  hash: string;
+  shortHash: string;
+  subject: string;
+};
+
+type IntegrationCheck = {
+  name: string;
+  status: string;
+  detail: string;
+  url: string | null;
+};
+
+type IntegrationWorkstream = {
+  taskId: string;
+  taskSummary: string;
+  agentName: string;
+  repositoryRoot: string;
+  baseBranch: string;
+  taskBranch: string;
+  sourceWorktreePath: string;
+  sourceRevision: string;
+  sourceDirty: boolean;
+  changedPaths: string[];
+  commits: IntegrationCommit[];
+  checks: IntegrationCheck[];
+  eligible: boolean;
+  eligibilityDetail: string;
+};
+
+type IntegrationConflict = {
+  path: string;
+  workstreamIds: string[];
+  reason: string;
+};
+
+type HealthCheck =
+  | { kind: "none" }
+  | { kind: "tcp"; host: string; port: number; timeoutMs?: number | null };
+
+type RunProfileComponent = {
+  id: string;
+  name: string;
+  executable: string;
+  arguments: string[];
+  cwd?: string | null;
+  environment: Record<string, string>;
+  port?: number | null;
+  healthCheck: HealthCheck;
+  dependsOn: string[];
+};
+
+type RunProfile = {
+  id: string;
+  name: string;
+  entryPoint?: string | null;
+  components: RunProfileComponent[];
+  updatedAt?: string;
+};
+
+type ConnectedPreviewWorkstream = {
+  taskId: string;
+  label: string;
+  branch: string;
+  state: string;
+};
+
+type PreviewComponentState = {
+  id: string;
+  name: string;
+  state: PreviewState;
+  pid: number | null;
+  port: number | null;
+  logs: string;
+  exitCode: number | null;
+  healthDetail: string;
+  startedAt: string | null;
+};
+
+type ConnectedPreview = {
+  state: PreviewState;
+  entryPoint: string | null;
+  workstreams: ConnectedPreviewWorkstream[];
+  components: PreviewComponentState[];
+  lastCheckedAt: string | null;
+  note: string;
+};
+
+type ValidationEvidence = {
+  id: string;
+  label: string;
+  outcome: string;
+  detail: string;
+  recordedAt: string;
+};
+
+type ReworkDecision = {
+  id: string;
+  taskId: string | null;
+  decision: string;
+  detail: string;
+  recordedAt: string;
+};
+
+type MergeReadiness = {
+  userDecision: boolean | null;
+  note: string;
+  decidedAt: string | null;
+};
+
+type IntegrationCandidate = {
+  id: string;
+  repositoryRoot: string;
+  targetBranch: string;
+  targetRevision: string;
+  integrationBranch: string;
+  integrationWorktreeRoot: string;
+  integrationWorktreePath: string;
+  strategy: IntegrationStrategy;
+  status: IntegrationStatus;
+  selectedWorkstreams: IntegrationWorkstream[];
+  conflicts: IntegrationConflict[];
+  runProfile: RunProfile | null;
+  preview: ConnectedPreview;
+  validationEvidence: ValidationEvidence[];
+  reworkDecisions: ReworkDecision[];
+  mergeReadiness: MergeReadiness;
+  strategyLog: string;
+  errorMessage: string | null;
+  worktreeCleaned: boolean;
+  publishedRef: string | null;
+  cleanupAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+type IntegrationInspection = {
+  repositoryRoot: string;
+  targetBranch: string;
+  targetRevision: string;
+  integrationWorktreeRoot: string;
+  strategy: IntegrationStrategy;
+  selectedWorkstreams: IntegrationWorkstream[];
+  likelyConflicts: IntegrationConflict[];
+  blockers: string[];
+  canCreate: boolean;
+  inspectedAt: string;
+};
+
 type RepositoryStatus = "ready" | "unknown";
 type RepositorySection =
   | "summary"
@@ -873,6 +1035,9 @@ app.innerHTML = `
       <button class="topbar-action" type="button" data-tasks-open aria-expanded="false">
         Tasks <span class="key-hint">palette</span>
       </button>
+      <button class="topbar-action" type="button" data-integration-open aria-expanded="false">
+        Preview <span class="key-hint">palette</span>
+      </button>
       <button class="topbar-action" type="button" data-attention-open aria-expanded="false">
         Attention <span class="attention-badge" data-attention-badge hidden aria-live="polite"></span>
         <span class="key-hint">palette</span>
@@ -1194,6 +1359,40 @@ app.innerHTML = `
           <span>Esc terminal</span>
         </div>
       </section>
+      <section class="store-shell integration-view" data-integration-view hidden aria-label="Connected Preview">
+        <div class="store-toolbar">
+          <div class="store-heading">
+            <span class="store-eyebrow">CONNECTED PREVIEW</span>
+            <span class="store-title">Combine workstreams before merge</span>
+          </div>
+          <button class="detail-action" type="button" data-integration-refresh>Refresh</button>
+          <button class="store-close" type="button" data-integration-close>Esc · terminal</button>
+        </div>
+        <div class="store-notice" data-integration-notice>
+          Select completed Agent Tasks, inspect their bases and checks, then create a separate Integration Worktree.
+        </div>
+        <div class="store-content integration-content">
+          <section class="store-list-panel" aria-label="Integration workstreams and candidates">
+            <div class="store-list-header">
+              <span>Workstreams</span>
+              <span data-integration-count>loading…</span>
+            </div>
+            <div class="store-list integration-workstreams" data-integration-workstreams role="listbox" aria-label="Integration workstreams"></div>
+            <div class="store-list-header integration-candidates-heading">
+              <span>Integration candidates</span>
+              <span data-integration-candidate-count>0</span>
+            </div>
+            <div class="store-list integration-candidates" data-integration-candidates role="listbox" aria-label="Integration candidates"></div>
+          </section>
+          <article class="store-detail integration-detail" data-integration-detail aria-live="polite"></article>
+        </div>
+        <div class="store-footer">
+          <span>↑↓ choose</span>
+          <span>Enter select or inspect</span>
+          <span>Processes never start implicitly</span>
+          <span>Esc · terminal</span>
+        </div>
+      </section>
       <section class="store-shell repository-view" data-repository-view hidden aria-label="Repository View">
         <div class="store-toolbar">
           <div class="store-heading">
@@ -1242,6 +1441,7 @@ app.innerHTML = `
       <span>Palette: Store</span>
       <span>Palette: My Apps</span>
       <span>Palette: Agent Tasks</span>
+      <span>Palette: Connected Preview</span>
       <span>Palette: Repository</span>
       <span>Palette: Attention</span>
       <span>Palette: New Tab</span>
@@ -1276,6 +1476,7 @@ const storeOpenButton = app.querySelector<HTMLButtonElement>("[data-store-open]"
 const appsOpenButton = app.querySelector<HTMLButtonElement>("[data-apps-open]")!;
 const agentsOpenButton = app.querySelector<HTMLButtonElement>("[data-agents-open]")!;
 const tasksOpenButton = app.querySelector<HTMLButtonElement>("[data-tasks-open]")!;
+const integrationOpenButton = app.querySelector<HTMLButtonElement>("[data-integration-open]")!;
 const attentionOpenButton = app.querySelector<HTMLButtonElement>("[data-attention-open]")!;
 const attentionBadge = app.querySelector<HTMLSpanElement>("[data-attention-badge]")!;
 const appsUpdateBadge = app.querySelector<HTMLSpanElement>("[data-apps-update-badge]")!;
@@ -1320,6 +1521,15 @@ const tasksCount = app.querySelector<HTMLSpanElement>("[data-tasks-count]")!;
 const tasksList = app.querySelector<HTMLDivElement>("[data-tasks-list]")!;
 const tasksError = app.querySelector<HTMLDivElement>("[data-tasks-error]")!;
 const tasksDetail = app.querySelector<HTMLElement>("[data-tasks-detail]")!;
+const integrationView = app.querySelector<HTMLElement>("[data-integration-view]")!;
+const integrationRefreshButton = app.querySelector<HTMLButtonElement>("[data-integration-refresh]")!;
+const integrationCloseButton = app.querySelector<HTMLButtonElement>("[data-integration-close]")!;
+const integrationNotice = app.querySelector<HTMLDivElement>("[data-integration-notice]")!;
+const integrationCount = app.querySelector<HTMLSpanElement>("[data-integration-count]")!;
+const integrationWorkstreams = app.querySelector<HTMLDivElement>("[data-integration-workstreams]")!;
+const integrationCandidateCount = app.querySelector<HTMLSpanElement>("[data-integration-candidate-count]")!;
+const integrationCandidates = app.querySelector<HTMLDivElement>("[data-integration-candidates]")!;
+const integrationDetail = app.querySelector<HTMLElement>("[data-integration-detail]")!;
 const repositoryView = app.querySelector<HTMLElement>("[data-repository-view]")!;
 const repositoryTitle = app.querySelector<HTMLSpanElement>("[data-repository-title]")!;
 const repositoryRefreshButton = app.querySelector<HTMLButtonElement>("[data-repository-refresh]")!;
@@ -1372,6 +1582,7 @@ if (
   !appsOpenButton ||
   !agentsOpenButton ||
   !tasksOpenButton ||
+  !integrationOpenButton ||
   !attentionOpenButton ||
   !attentionBadge ||
   !appsUpdateBadge ||
@@ -1416,6 +1627,15 @@ if (
   !tasksList ||
   !tasksError ||
   !tasksDetail ||
+  !integrationView ||
+  !integrationRefreshButton ||
+  !integrationCloseButton ||
+  !integrationNotice ||
+  !integrationCount ||
+  !integrationWorkstreams ||
+  !integrationCandidateCount ||
+  !integrationCandidates ||
+  !integrationDetail ||
   !repositoryView ||
   !repositoryTitle ||
   !repositoryRefreshButton ||
@@ -1464,7 +1684,7 @@ let resizeTimer: number | undefined;
 let terminalStatusText = "connecting";
 let terminalStatusState = "";
 let storeOpen = false;
-let activeSurface: "launchpad" | "store" | "apps" | "agents" | "tasks" | "repository" | "attention" = "launchpad";
+let activeSurface: "launchpad" | "store" | "apps" | "agents" | "tasks" | "integration" | "repository" | "attention" = "launchpad";
 let launchpadEntries: LaunchpadEntry[] = [];
 let selectedLaunchpadId: string | undefined;
 let launchpadRequestId = 0;
@@ -1499,6 +1719,16 @@ let taskDraftBaseBranch = "";
 let taskDraftBranch = "";
 let taskDraftWorktreeRoot = "";
 let taskDraftEntryId: string | undefined;
+let integrationTasks: AgentTask[] = [];
+let integrationCandidatesState: IntegrationCandidate[] = [];
+let selectedIntegrationTaskIds = new Set<string>();
+let selectedIntegrationCandidateId: string | undefined;
+let integrationInspection: IntegrationInspection | undefined;
+let integrationRequestId = 0;
+let integrationBusy = false;
+let integrationTargetBranch = "";
+let integrationWorktreeRoot = "";
+let integrationStrategy: IntegrationStrategy = "mergeNoFf";
 let repositorySnapshot: RepositorySnapshot | undefined;
 let selectedRepositorySection: RepositorySection = "summary";
 let repositoryRequestId = 0;
@@ -1640,6 +1870,7 @@ function setTopbarActionsDisabled(disabled: boolean): void {
   appsOpenButton.disabled = disabled;
   agentsOpenButton.disabled = disabled;
   tasksOpenButton.disabled = disabled;
+  integrationOpenButton.disabled = disabled;
   attentionOpenButton.disabled = disabled;
 }
 
@@ -1742,6 +1973,7 @@ function openOnboarding(): void {
   appsView.hidden = true;
   agentsView.hidden = true;
   tasksView.hidden = true;
+  integrationView.hidden = true;
   repositoryView.hidden = true;
   attentionView.hidden = true;
   closeRepositoryQuickMenu();
@@ -2257,6 +2489,15 @@ function frameCommands(): FrameCommand[] {
       run: () => {
         closeCommandOverlay();
         openAgentTasks();
+      },
+    },
+    {
+      id: "integration",
+      label: "Repository · Connected Preview",
+      description: "Combine selected Agent Task workstreams in a separate Worktree before merge.",
+      run: () => {
+        closeCommandOverlay();
+        openIntegrationView();
       },
     },
     {
@@ -3536,6 +3777,8 @@ function scheduleAgentRefresh(): void {
 
 function openAgentCockpit(): void {
   closeRepositoryQuickMenu();
+  integrationView.hidden = true;
+  integrationOpenButton.setAttribute("aria-expanded", "false");
   repositoryView.hidden = true;
   repositoryOpenButton.setAttribute("aria-expanded", "false");
   if (storeOpen && activeSurface === "agents") {
@@ -4238,6 +4481,8 @@ async function refreshAgentTasks(): Promise<void> {
 
 function openAgentTasks(): void {
   closeRepositoryQuickMenu();
+  integrationView.hidden = true;
+  integrationOpenButton.setAttribute("aria-expanded", "false");
   repositoryView.hidden = true;
   repositoryOpenButton.setAttribute("aria-expanded", "false");
   if (storeOpen && activeSurface === "tasks") {
@@ -4455,6 +4700,670 @@ function moveAgentTaskSelection(offset: number): void {
   }
   const currentIndex = Math.max(0, tasks.findIndex((task) => task.id === selectedTaskId));
   selectAgentTask(tasks[(currentIndex + offset + tasks.length) % tasks.length].id, true);
+}
+
+function integrationStatusLabel(status: IntegrationStatus): string {
+  return {
+    preparing: "Preparing Worktree",
+    ready: "Ready for preview",
+    conflicted: "Conflicts paused",
+    previewing: "Preview running",
+    validated: "Validation recorded",
+    reworkRequested: "Rework requested",
+    setupFailed: "Setup failed",
+    published: "Published · cleanup allowed",
+    abandoned: "Abandoned · cleanup allowed",
+  }[status];
+}
+
+function previewStateLabel(state: PreviewState): string {
+  return {
+    starting: "starting",
+    healthy: "healthy",
+    degraded: "degraded",
+    failed: "failed",
+    stopped: "stopped",
+  }[state];
+}
+
+function integrationEligibleTasks(): AgentTask[] {
+  return integrationTasks
+    .filter((task) => !task.status.toLowerCase().startsWith("cancelled"))
+    .sort((left, right) => {
+      const rank = (task: AgentTask) => {
+        if (task.status === "handoffReady") return 0;
+        if (task.status === "ready") return 1;
+        if (task.status === "active") return 2;
+        return 3;
+      };
+      return rank(left) - rank(right) || Number(right.updatedAt) - Number(left.updatedAt);
+    });
+}
+
+function integrationTaskCanSelect(task: AgentTask): boolean {
+  return (task.status === "ready" || task.status === "handoffReady") && !task.lease;
+}
+
+function integrationDefaultWorktreeRoot(repository: string): string {
+  const separator = Math.max(repository.lastIndexOf("\\"), repository.lastIndexOf("/"));
+  return `${separator >= 0 ? repository.slice(0, separator) : repository}\\arkonad-integrations`;
+}
+
+function integrationRepositoryRoot(): string {
+  return (
+    integrationTasks.find((task) => selectedIntegrationTaskIds.has(task.id))?.repositoryRoot ??
+    integrationTasks[0]?.repositoryRoot ??
+    repositoryPath()
+  );
+}
+
+function integrationTaskLabel(task: AgentTask): string {
+  return task.taskSummary || task.taskBranch || "Untitled workstream";
+}
+
+function replaceIntegrationCandidate(candidate: IntegrationCandidate): void {
+  const index = integrationCandidatesState.findIndex((item) => item.id === candidate.id);
+  if (index >= 0) {
+    integrationCandidatesState[index] = candidate;
+  } else {
+    integrationCandidatesState.unshift(candidate);
+  }
+  selectedIntegrationCandidateId = candidate.id;
+  renderIntegrationView();
+}
+
+function selectIntegrationTask(id: string, focusRow = false): void {
+  const task = integrationTasks.find((item) => item.id === id);
+  if (!task || !integrationTaskCanSelect(task)) {
+    return;
+  }
+  if (selectedIntegrationTaskIds.has(id)) {
+    selectedIntegrationTaskIds.delete(id);
+  } else {
+    selectedIntegrationTaskIds.add(id);
+  }
+  integrationInspection = undefined;
+  renderIntegrationView();
+  if (focusRow) {
+    window.requestAnimationFrame(() =>
+      integrationWorkstreams.querySelector<HTMLButtonElement>(`[data-integration-task-id="${id}"]`)?.focus(),
+    );
+  }
+}
+
+function selectIntegrationCandidate(id: string, focusRow = false): void {
+  if (!integrationCandidatesState.some((candidate) => candidate.id === id)) {
+    return;
+  }
+  selectedIntegrationCandidateId = id;
+  integrationInspection = undefined;
+  renderIntegrationView();
+  if (focusRow) {
+    window.requestAnimationFrame(() =>
+      integrationCandidates.querySelector<HTMLButtonElement>(`[data-integration-candidate-id="${id}"]`)?.focus(),
+    );
+  }
+}
+
+function moveIntegrationWorkstreamSelection(offset: number): void {
+  const tasks = integrationEligibleTasks();
+  if (tasks.length === 0) return;
+  const current = tasks.findIndex((task) => selectedIntegrationTaskIds.has(task.id));
+  const next = tasks[(Math.max(current, 0) + offset + tasks.length) % tasks.length];
+  selectIntegrationTask(next.id, true);
+}
+
+function moveIntegrationCandidateSelection(offset: number): void {
+  if (integrationCandidatesState.length === 0) return;
+  const current = Math.max(
+    0,
+    integrationCandidatesState.findIndex((candidate) => candidate.id === selectedIntegrationCandidateId),
+  );
+  const next = integrationCandidatesState[(current + offset + integrationCandidatesState.length) % integrationCandidatesState.length];
+  selectIntegrationCandidate(next.id, true);
+}
+
+function integrationFormField(
+  parent: HTMLElement,
+  label: string,
+  value: string,
+  placeholder: string,
+): HTMLInputElement {
+  const wrapper = makeElement("label", "agent-task-field");
+  wrapper.append(makeElement("span", undefined, label));
+  const input = makeElement("input") as HTMLInputElement;
+  input.type = "text";
+  input.value = value;
+  input.placeholder = placeholder;
+  wrapper.append(input);
+  parent.append(wrapper);
+  return input;
+}
+
+function integrationTextarea(
+  parent: HTMLElement,
+  label: string,
+  value: string,
+  placeholder: string,
+  rows = 3,
+): HTMLTextAreaElement {
+  const wrapper = makeElement("label", "agent-task-field");
+  wrapper.append(makeElement("span", undefined, label));
+  const input = makeElement("textarea") as HTMLTextAreaElement;
+  input.rows = rows;
+  input.value = value;
+  input.placeholder = placeholder;
+  wrapper.append(input);
+  parent.append(wrapper);
+  return input;
+}
+
+function integrationButton(label: string, onClick: () => void, disabled = false): HTMLButtonElement {
+  const button = makeElement("button", "detail-action", label) as HTMLButtonElement;
+  button.type = "button";
+  button.disabled = disabled || integrationBusy;
+  button.addEventListener("click", onClick);
+  return button;
+}
+
+function renderIntegrationWorkstreams(): void {
+  const tasks = integrationEligibleTasks();
+  integrationWorkstreams.replaceChildren();
+  integrationCount.textContent = `${tasks.filter(integrationTaskCanSelect).length} selectable`;
+  if (tasks.length === 0) {
+    integrationWorkstreams.append(makeElement("div", "store-empty-list", "No saved Agent Tasks are ready for integration."));
+    return;
+  }
+  for (const task of tasks) {
+    const selectable = integrationTaskCanSelect(task);
+    const selected = selectedIntegrationTaskIds.has(task.id);
+    const row = makeElement("button", "store-row") as HTMLButtonElement;
+    row.type = "button";
+    row.dataset.integrationTaskId = task.id;
+    row.disabled = !selectable;
+    row.setAttribute("role", "option");
+    row.setAttribute("aria-selected", String(selected));
+    row.classList.toggle("is-selected", selected);
+    const top = makeElement("span", "store-row-top");
+    top.append(
+      makeElement("strong", undefined, `${selected ? "[x] " : "[ ] "}${integrationTaskLabel(task)}`),
+      makeElement("span", "store-row-category", task.agentName),
+    );
+    row.append(
+      top,
+      makeElement("span", "store-row-summary", `${task.baseBranch} → ${task.taskBranch}`),
+      makeElement(
+        "span",
+        `store-row-state ${selectable ? "status-active" : "status-unknown"}`,
+        selectable ? taskStatusLabel(task.status) : `${taskStatusLabel(task.status)} · release lease`,
+      ),
+    );
+    if (selectable) {
+      row.addEventListener("click", () => selectIntegrationTask(task.id));
+    }
+    integrationWorkstreams.append(row);
+  }
+}
+
+function renderIntegrationCandidates(): void {
+  integrationCandidates.replaceChildren();
+  integrationCandidateCount.textContent = String(integrationCandidatesState.length);
+  if (integrationCandidatesState.length === 0) {
+    integrationCandidates.append(makeElement("div", "store-empty-list", "No Integration Worktree exists yet."));
+    return;
+  }
+  for (const candidate of integrationCandidatesState) {
+    const selected = candidate.id === selectedIntegrationCandidateId;
+    const row = makeElement("button", "store-row") as HTMLButtonElement;
+    row.type = "button";
+    row.dataset.integrationCandidateId = candidate.id;
+    row.setAttribute("role", "option");
+    row.setAttribute("aria-selected", String(selected));
+    row.classList.toggle("is-selected", selected);
+    row.append(
+      makeElement("span", "store-row-top", candidate.targetBranch),
+      makeElement("span", "store-row-summary", `${candidate.id} · ${candidate.selectedWorkstreams.length} workstreams`),
+      makeElement(
+        "span",
+        `store-row-state ${candidate.status === "conflicted" || candidate.status === "setupFailed" ? "status-error" : candidate.status === "previewing" ? "status-active" : "status-warning"}`,
+        integrationStatusLabel(candidate.status),
+      ),
+    );
+    row.addEventListener("click", () => selectIntegrationCandidate(candidate.id));
+    integrationCandidates.append(row);
+  }
+}
+
+function renderIntegrationSetup(): void {
+  integrationDetail.replaceChildren();
+  const header = makeElement("header", "detail-header");
+  header.append(
+    makeElement("span", "detail-category", "integration plan"),
+    makeElement("h2", "detail-title", "Choose workstreams"),
+    makeElement("p", "detail-summary", `${selectedIntegrationTaskIds.size} selected · source Worktrees remain unchanged`),
+  );
+  integrationDetail.append(header);
+
+  const form = appendDetailSection(integrationDetail, "Integration target");
+  const repository = integrationRepositoryRoot();
+  if (!integrationTargetBranch) {
+    integrationTargetBranch = repositorySnapshot?.suggestedBaseBranch ?? "main";
+  }
+  if (!integrationWorktreeRoot) {
+    integrationWorktreeRoot = integrationDefaultWorktreeRoot(repository);
+  }
+  appendDetailLine(form, "Repository", repository || "not detected");
+  const targetBranch = integrationFormField(form, "Target branch", integrationTargetBranch, "main");
+  targetBranch.addEventListener("input", () => {
+    integrationTargetBranch = targetBranch.value;
+    integrationInspection = undefined;
+  });
+  const worktreeRoot = integrationFormField(form, "Integration Worktree root", integrationWorktreeRoot, "D:\\Worktrees\\arkonad");
+  worktreeRoot.addEventListener("input", () => {
+    integrationWorktreeRoot = worktreeRoot.value;
+    integrationInspection = undefined;
+  });
+  const strategyLabel = makeElement("label", "agent-task-field");
+  strategyLabel.append(makeElement("span", undefined, "Combination strategy"));
+  const strategy = makeElement("select") as HTMLSelectElement;
+  strategy.innerHTML = `
+    <option value="mergeNoFf">Merge each branch · no fast-forward</option>
+    <option value="cherryPick">Cherry-pick source commits in order</option>
+  `;
+  strategy.value = integrationStrategy;
+  strategy.addEventListener("change", () => {
+    integrationStrategy = strategy.value as IntegrationStrategy;
+    integrationInspection = undefined;
+  });
+  strategyLabel.append(strategy);
+  form.append(strategyLabel);
+  form.append(
+    makeElement(
+      "p",
+      "detail-note",
+      "Inspection reads bases, commits, GitHub checks when available, changed paths, and likely overlaps. It does not combine anything.",
+    ),
+  );
+  form.append(
+    integrationButton(
+      "Inspect selected workstreams",
+      () => void inspectIntegrationSelection(),
+      selectedIntegrationTaskIds.size < 2,
+    ),
+  );
+
+  if (integrationInspection) {
+    renderIntegrationInspection(form, integrationInspection);
+  }
+}
+
+function renderIntegrationInspection(parent: HTMLElement, inspection: IntegrationInspection): void {
+  const section = appendDetailSection(parent.parentElement ?? parent, "Preflight evidence");
+  appendDetailLine(section, "Target", `${inspection.targetBranch} · ${inspection.targetRevision || "unresolved"}`);
+  appendDetailLine(section, "Strategy", inspection.strategy === "mergeNoFf" ? "merge · no fast-forward" : "cherry-pick");
+  appendDetailLine(section, "Worktree root", inspection.integrationWorktreeRoot);
+  if (inspection.blockers.length > 0) {
+    const blockers = makeElement("div", "install-plan-warning");
+    blockers.append(makeElement("strong", undefined, "Review before create"));
+    for (const blocker of inspection.blockers) {
+      blockers.append(makeElement("p", undefined, blocker));
+    }
+    section.append(blockers);
+  }
+  for (const workstream of inspection.selectedWorkstreams) {
+    const source = appendDetailSection(section, `${workstream.taskSummary || workstream.taskBranch} · ${workstream.agentName}`);
+    appendDetailLine(source, "Task", workstream.taskId);
+    appendDetailLine(source, "Base", workstream.baseBranch);
+    appendDetailLine(source, "Branch", workstream.taskBranch);
+    appendDetailLine(source, "Revision", workstream.sourceRevision || "unresolved");
+    appendDetailLine(source, "Source Worktree", workstream.sourceWorktreePath);
+    appendDetailLine(source, "Changed paths", workstream.changedPaths.length ? workstream.changedPaths.join(", ") : "none found");
+    appendDetailLine(source, "Eligibility", workstream.eligible ? "eligible" : workstream.eligibilityDetail);
+    const commits = makeElement("pre", "task-plan-evidence", workstream.commits.length
+      ? workstream.commits.map((commit) => `${commit.shortHash} ${commit.subject}`).join("\n")
+      : "No committed changes found");
+    source.append(makeElement("span", "detail-label", "Commits"), commits);
+    const checks = makeElement("pre", "task-plan-evidence", workstream.checks.length
+      ? workstream.checks.map((check) => `${check.status} · ${check.name}\n${check.detail}`).join("\n")
+      : "Checks unavailable");
+    source.append(makeElement("span", "detail-label", "Checks"), checks);
+  }
+  if (inspection.likelyConflicts.length > 0) {
+    const conflicts = appendDetailSection(section, "Likely overlaps");
+    conflicts.append(makeElement("p", "detail-note", "These are path overlaps detected before integration, not confirmed merge conflicts."));
+    for (const conflict of inspection.likelyConflicts) {
+      appendDetailLine(conflicts, conflict.path, conflict.workstreamIds.join(", "));
+    }
+  }
+  const actions = makeElement("div", "install-button-row");
+  actions.append(
+    integrationButton(
+      "Create Integration Worktree",
+      () => void createIntegrationCandidate(inspection),
+      !inspection.canCreate,
+    ),
+  );
+  section.append(actions);
+}
+
+async function inspectIntegrationSelection(): Promise<void> {
+  if (selectedIntegrationTaskIds.size < 2 || integrationBusy) return;
+  integrationBusy = true;
+  integrationNotice.textContent = "Reading workstream bases, commits, checks, and likely overlaps…";
+  renderIntegrationView();
+  try {
+    integrationInspection = await invoke<IntegrationInspection>("integration_inspect", {
+      request: {
+        taskIds: [...selectedIntegrationTaskIds],
+        targetBranch: integrationTargetBranch,
+        integrationWorktreeRoot: integrationWorktreeRoot,
+        strategy: integrationStrategy,
+      },
+    });
+    integrationNotice.textContent = integrationInspection.canCreate
+      ? "Preflight complete. Creating the candidate will use a separate Integration Worktree."
+      : "Preflight found blockers. Source Worktrees were not changed.";
+  } catch (error) {
+    integrationInspection = undefined;
+    integrationNotice.textContent = `Could not inspect workstreams: ${String(error)}`;
+  } finally {
+    integrationBusy = false;
+    renderIntegrationView();
+  }
+}
+
+async function createIntegrationCandidate(inspection: IntegrationInspection): Promise<void> {
+  if (integrationBusy) return;
+  if (inspection.likelyConflicts.length > 0 && !window.confirm("Likely path overlaps were found. Create the Integration Worktree and let Git confirm the result?")) {
+    return;
+  }
+  integrationBusy = true;
+  integrationNotice.textContent = "Creating the separate Integration Worktree and applying the recorded strategy…";
+  renderIntegrationView();
+  try {
+    const candidate = await invoke<IntegrationCandidate>("integration_create", {
+      request: {
+        taskIds: [...selectedIntegrationTaskIds],
+        targetBranch: inspection.targetBranch,
+        integrationWorktreeRoot: inspection.integrationWorktreeRoot,
+        strategy: inspection.strategy,
+      },
+    });
+    replaceIntegrationCandidate(candidate);
+    integrationNotice.textContent = candidate.status === "conflicted"
+      ? "Integration paused. The candidate names the responsible workstreams and paths; source Worktrees remain unchanged."
+      : candidate.status === "setupFailed"
+        ? "Integration setup failed. The saved candidate keeps the error for recovery."
+        : "Integration candidate created. Declare a Run Profile before starting Connected Preview.";
+  } catch (error) {
+    integrationNotice.textContent = `Could not create the Integration Worktree: ${String(error)}`;
+  } finally {
+    integrationBusy = false;
+    renderIntegrationView();
+  }
+}
+
+function runProfileExample(): string {
+  return JSON.stringify({
+    id: "local-preview",
+    name: "Frontend + backend",
+    entryPoint: "http://127.0.0.1:5173",
+    components: [
+      {
+        id: "backend",
+        name: "Backend",
+        executable: "npm.cmd",
+        arguments: ["run", "dev"],
+        cwd: ".",
+        environment: {},
+        port: 3000,
+        healthCheck: { kind: "tcp", host: "127.0.0.1", port: 3000 },
+        dependsOn: [],
+      },
+      {
+        id: "frontend",
+        name: "Frontend",
+        executable: "npm.cmd",
+        arguments: ["run", "dev"],
+        cwd: ".",
+        environment: {},
+        port: 5173,
+        healthCheck: { kind: "tcp", host: "127.0.0.1", port: 5173 },
+        dependsOn: ["backend"],
+      },
+    ],
+  }, null, 2);
+}
+
+async function integrationCandidateAction(
+  command: string,
+  request: Record<string, unknown>,
+  successMessage: string,
+): Promise<void> {
+  if (integrationBusy) return;
+  integrationBusy = true;
+  integrationNotice.textContent = "Updating the saved Integration candidate…";
+  renderIntegrationView();
+  try {
+    const candidate = await invoke<IntegrationCandidate>(command, { request });
+    replaceIntegrationCandidate(candidate);
+    integrationNotice.textContent = successMessage;
+  } catch (error) {
+    integrationNotice.textContent = `Integration action stopped: ${String(error)}`;
+  } finally {
+    integrationBusy = false;
+    renderIntegrationView();
+  }
+}
+
+function renderIntegrationCandidate(candidate: IntegrationCandidate): void {
+  integrationDetail.replaceChildren();
+  const header = makeElement("header", "detail-header");
+  header.append(
+    makeElement("span", "detail-category", "connected preview"),
+    makeElement("h2", "detail-title", candidate.targetBranch),
+    makeElement("p", "detail-summary", `${integrationStatusLabel(candidate.status)} · preview ${previewStateLabel(candidate.preview.state)}`),
+    makeElement("p", "detail-meta", candidate.id),
+  );
+  integrationDetail.append(header);
+
+  const context = appendDetailSection(integrationDetail, "Integration candidate");
+  appendDetailLine(context, "Target", `${candidate.targetBranch} · ${candidate.targetRevision}`);
+  appendDetailLine(context, "Integration branch", candidate.integrationBranch);
+  appendDetailLine(context, "Integration Worktree", candidate.integrationWorktreePath);
+  appendDetailLine(context, "Strategy", candidate.strategy === "mergeNoFf" ? "merge · no fast-forward" : "cherry-pick");
+  appendDetailLine(context, "Merge readiness", candidate.mergeReadiness.userDecision === null ? "not decided" : candidate.mergeReadiness.userDecision ? "user marked ready" : "user marked not ready");
+  if (candidate.errorMessage) context.append(makeElement("p", "install-plan-warning", candidate.errorMessage));
+
+  const workstreams = appendDetailSection(integrationDetail, "Workstreams present");
+  for (const workstream of candidate.selectedWorkstreams) {
+    const source = makeElement("div", "detail-item");
+    source.append(
+      makeElement("strong", undefined, workstream.taskSummary || workstream.taskBranch),
+      makeElement("span", "detail-note", `${workstream.agentName} · ${workstream.baseBranch} → ${workstream.taskBranch}`),
+      makeElement("span", "detail-note", `${workstream.commits.length} commits · ${workstream.changedPaths.length} changed paths`),
+    );
+    workstreams.append(source);
+  }
+
+  if (candidate.conflicts.length > 0) {
+    const conflictSection = appendDetailSection(integrationDetail, "Conflicts paused");
+    conflictSection.append(makeElement("p", "install-plan-warning", "Git left these paths unresolved. Resolve only in the Integration Worktree, then refresh this candidate."));
+    for (const conflict of candidate.conflicts) {
+      appendDetailLine(conflictSection, conflict.path, conflict.workstreamIds.join(", "));
+      conflictSection.append(makeElement("p", "detail-note", conflict.reason));
+    }
+    conflictSection.append(integrationButton("Refresh conflict state", () => void integrationCandidateAction("integration_refresh", { candidateId: candidate.id }, "Conflict state refreshed.")));
+  }
+  if (candidate.strategyLog) {
+    const strategyLog = appendDetailSection(integrationDetail, "Recorded integration strategy");
+    strategyLog.append(makeElement("pre", "install-log", candidate.strategyLog));
+  }
+
+  const profileSection = appendDetailSection(integrationDetail, "Run Profile");
+  profileSection.append(makeElement("p", "detail-note", "Declare executable arguments, working directories, ports, health probes, and dependencies. Processes start only after you save the profile and press Start."));
+  const profileInput = integrationTextarea(profileSection, "Profile JSON", candidate.runProfile ? JSON.stringify(candidate.runProfile, null, 2) : runProfileExample(), "Run Profile JSON", 12);
+  const profileActions = makeElement("div", "install-button-row");
+  profileActions.append(integrationButton("Save Run Profile", () => {
+    try {
+      const profile = JSON.parse(profileInput.value) as RunProfile;
+      void integrationCandidateAction("integration_run_profile_save", { candidateId: candidate.id, profile }, "Run Profile saved. Preview processes remain stopped until you start them.");
+    } catch (error) {
+      integrationNotice.textContent = `Run Profile JSON is invalid: ${String(error)}`;
+    }
+  }));
+  profileSection.append(profileActions);
+
+  const previewSection = appendDetailSection(integrationDetail, "Connected Preview");
+  appendDetailLine(previewSection, "Overall state", previewStateLabel(candidate.preview.state));
+  appendDetailLine(previewSection, "Entry point", candidate.preview.entryPoint ?? "not declared");
+  appendDetailLine(previewSection, "Last checked", candidate.preview.lastCheckedAt ? formatTimestamp(candidate.preview.lastCheckedAt) : "not checked");
+  previewSection.append(makeElement("p", "detail-note", candidate.preview.note));
+  const previewActions = makeElement("div", "install-button-row");
+  previewActions.append(
+    integrationButton("Start all components", () => void integrationCandidateAction("integration_preview_start", { candidateId: candidate.id, componentIds: [] }, "Preview start requested."), !candidate.runProfile || candidate.status === "conflicted"),
+    integrationButton("Refresh health and logs", () => void integrationCandidateAction("integration_preview_status", { candidateId: candidate.id }, "Preview status refreshed.")),
+    integrationButton("Stop all components", () => void integrationCandidateAction("integration_preview_stop", { candidateId: candidate.id, componentIds: [] }, "Preview processes stopped.")),
+  );
+  previewSection.append(previewActions);
+  for (const component of candidate.preview.components) {
+    const componentSection = appendDetailSection(previewSection, `${component.name} · ${previewStateLabel(component.state)}`);
+    appendDetailLine(componentSection, "Port", component.port ? String(component.port) : "not declared");
+    appendDetailLine(componentSection, "PID", component.pid ? String(component.pid) : "none");
+    appendDetailLine(componentSection, "Health", component.healthDetail || "not checked");
+    if (component.logs) componentSection.append(makeElement("pre", "install-log", component.logs));
+  }
+
+  const evidence = appendDetailSection(integrationDetail, "Validation evidence");
+  if (candidate.validationEvidence.length === 0) {
+    evidence.append(makeElement("p", "detail-empty", "No validation evidence recorded yet."));
+  } else {
+    for (const item of candidate.validationEvidence) {
+      evidence.append(makeElement("p", "detail-note", `${item.outcome} · ${item.label}: ${item.detail}`));
+    }
+  }
+  const evidenceLabel = integrationFormField(evidence, "Evidence label", "", "Frontend ↔ backend smoke test");
+  const evidenceOutcome = makeElement("select") as HTMLSelectElement;
+  evidenceOutcome.innerHTML = `<option value="passed">Passed</option><option value="failed">Failed</option><option value="observed">Observed</option>`;
+  const evidenceOutcomeLabel = makeElement("label", "agent-task-field");
+  evidenceOutcomeLabel.append(makeElement("span", undefined, "Outcome"), evidenceOutcome);
+  evidence.append(evidenceOutcomeLabel);
+  const evidenceDetail = integrationTextarea(evidence, "Evidence detail", "", "What you ran, what responded, and what remains uncertain", 2);
+  evidence.append(integrationButton("Record validation", () => void integrationCandidateAction("integration_validation_record", { candidateId: candidate.id, label: evidenceLabel.value, outcome: evidenceOutcome.value, detail: evidenceDetail.value }, "Validation evidence attached to the candidate.")));
+
+  const rework = appendDetailSection(integrationDetail, "Rework decision");
+  const reworkTask = makeElement("select") as HTMLSelectElement;
+  reworkTask.innerHTML = `<option value="">All workstreams</option>${candidate.selectedWorkstreams.map((item) => `<option value="${item.taskId}">${item.taskSummary || item.taskBranch}</option>`).join("")}`;
+  const reworkTaskLabel = makeElement("label", "agent-task-field");
+  reworkTaskLabel.append(makeElement("span", undefined, "Workstream"), reworkTask);
+  rework.append(reworkTaskLabel);
+  const reworkDecision = makeElement("select") as HTMLSelectElement;
+  reworkDecision.innerHTML = `<option value="accept">Accept current result</option><option value="rework">Request rework</option><option value="exclude">Exclude from next publication</option>`;
+  const reworkDecisionLabel = makeElement("label", "agent-task-field");
+  reworkDecisionLabel.append(makeElement("span", undefined, "Decision"), reworkDecision);
+  rework.append(reworkDecisionLabel);
+  const reworkDetail = integrationTextarea(rework, "Decision detail", "", "Why this workstream should be accepted, reworked, or excluded", 2);
+  rework.append(integrationButton("Record rework decision", () => void integrationCandidateAction("integration_rework_record", { candidateId: candidate.id, taskId: reworkTask.value || null, decision: reworkDecision.value, detail: reworkDetail.value }, "Rework decision attached to the candidate.")));
+  for (const item of candidate.reworkDecisions) {
+    rework.append(makeElement("p", "detail-note", `${item.decision} · ${item.taskId ?? "all workstreams"}: ${item.detail}`));
+  }
+
+  const lifecycle = appendDetailSection(integrationDetail, "Merge readiness and cleanup");
+  const readinessNote = integrationTextarea(lifecycle, "Decision note", candidate.mergeReadiness.note, "The user decides when this candidate is ready for publication", 2);
+  const readinessActions = makeElement("div", "install-button-row");
+  readinessActions.append(
+    integrationButton("Mark ready for user merge", () => {
+      if (window.confirm("Mark this candidate ready for the user’s separate merge or publication decision?")) {
+        void integrationCandidateAction("integration_readiness_set", { candidateId: candidate.id, ready: true, note: readinessNote.value, confirmed: true }, "Merge readiness recorded as a user decision.");
+      }
+    }, candidate.conflicts.length > 0),
+    integrationButton("Mark not ready", () => void integrationCandidateAction("integration_readiness_set", { candidateId: candidate.id, ready: false, note: readinessNote.value, confirmed: true }, "Candidate remains not ready for merge.")),
+  );
+  lifecycle.append(readinessActions);
+  const publicationRef = integrationFormField(lifecycle, "Publication reference", candidate.publishedRef ?? "", "PR URL, commit, or release reference");
+  const lifecycleActions = makeElement("div", "install-button-row");
+  lifecycleActions.append(
+    integrationButton("Mark publication confirmed", () => {
+      if (window.confirm("Confirm that this integration candidate was published through the intended user-controlled Git flow?")) {
+        void integrationCandidateAction("integration_mark_published", { candidateId: candidate.id, publicationRef: publicationRef.value, confirmed: true }, "Publication recorded. Cleanup is now available after inspection.");
+      }
+    }, candidate.status === "published" || candidate.status === "abandoned"),
+    integrationButton("Abandon candidate", () => {
+      if (window.confirm("Abandon this integration candidate? The Worktree will remain until you explicitly clean it up.")) {
+        void integrationCandidateAction("integration_abandon", { candidateId: candidate.id, worktreePath: candidate.integrationWorktreePath, confirmed: true }, "Candidate abandoned. Its Worktree is preserved until cleanup.");
+      }
+    }, candidate.status === "published" || candidate.status === "abandoned"),
+    integrationButton("Clean up Integration Worktree", () => {
+      if (window.confirm("Remove this exact Integration Worktree? Source Worktrees and branches remain unchanged.")) {
+        void integrationCandidateAction("integration_cleanup", { candidateId: candidate.id, worktreePath: candidate.integrationWorktreePath, confirmed: true }, "Integration Worktree cleaned up after the required lifecycle decision.");
+      }
+    }, !candidate.worktreeCleaned && candidate.status !== "published" && candidate.status !== "abandoned"),
+  );
+  lifecycle.append(lifecycleActions);
+  if (candidate.worktreeCleaned) lifecycle.append(makeElement("p", "detail-note", `Worktree cleaned at ${candidate.cleanupAt ? formatTimestamp(candidate.cleanupAt) : "recorded time"}.`));
+}
+
+function renderIntegrationView(): void {
+  renderIntegrationWorkstreams();
+  renderIntegrationCandidates();
+  const candidate = integrationCandidatesState.find((item) => item.id === selectedIntegrationCandidateId);
+  if (candidate) {
+    renderIntegrationCandidate(candidate);
+  } else {
+    renderIntegrationSetup();
+  }
+}
+
+async function refreshIntegrationState(): Promise<void> {
+  const requestId = ++integrationRequestId;
+  try {
+    const [tasks, candidates] = await Promise.all([
+      invoke<AgentTask[]>("agent_task_list"),
+      invoke<IntegrationCandidate[]>("integration_list"),
+    ]);
+    if (requestId !== integrationRequestId) return;
+    integrationTasks = tasks;
+    selectedIntegrationTaskIds = new Set(
+      [...selectedIntegrationTaskIds].filter((id) => tasks.some((task) => task.id === id)),
+    );
+    integrationCandidatesState = candidates;
+    if (selectedIntegrationCandidateId && !candidates.some((candidate) => candidate.id === selectedIntegrationCandidateId)) {
+      selectedIntegrationCandidateId = candidates[0]?.id;
+    }
+    integrationNotice.textContent = "Select completed workstreams to inspect their bases, commits, checks, and likely conflicts.";
+    renderIntegrationView();
+  } catch (error) {
+    integrationNotice.textContent = `Could not read integration state: ${String(error)}`;
+    renderIntegrationView();
+  }
+}
+
+function openIntegrationView(): void {
+  closeRepositoryQuickMenu();
+  storeOpen = true;
+  activeSurface = "integration";
+  terminalShell.hidden = true;
+  launchpadView.hidden = true;
+  storeView.hidden = true;
+  appsView.hidden = true;
+  agentsView.hidden = true;
+  tasksView.hidden = true;
+  integrationView.hidden = false;
+  repositoryView.hidden = true;
+  attentionView.hidden = true;
+  launchpadOpenButton.setAttribute("aria-expanded", "false");
+  storeOpenButton.setAttribute("aria-expanded", "false");
+  appsOpenButton.setAttribute("aria-expanded", "false");
+  agentsOpenButton.setAttribute("aria-expanded", "false");
+  tasksOpenButton.setAttribute("aria-expanded", "false");
+  integrationOpenButton.setAttribute("aria-expanded", "true");
+  repositoryOpenButton.setAttribute("aria-expanded", "false");
+  attentionOpenButton.setAttribute("aria-expanded", "false");
+  sessionMeta.textContent = "connected preview";
+  status.textContent = "preview";
+  status.dataset.state = "ready";
+  void refreshIntegrationState();
+  window.requestAnimationFrame(() => integrationWorkstreams.querySelector<HTMLButtonElement>("button")?.focus());
 }
 
 async function releaseAgentTask(task: AgentTask): Promise<void> {
@@ -5119,6 +6028,8 @@ function openRepositoryQuickMenu(): void {
 
 function openRepositoryView(section: RepositorySection = "summary"): void {
   closeRepositoryQuickMenu();
+  integrationView.hidden = true;
+  integrationOpenButton.setAttribute("aria-expanded", "false");
   selectedRepositorySection = section;
   storeOpen = true;
   activeSurface = "repository";
@@ -5145,6 +6056,8 @@ function openRepositoryView(section: RepositorySection = "summary"): void {
 
 function openAttentionQueue(): void {
   closeRepositoryQuickMenu();
+  integrationView.hidden = true;
+  integrationOpenButton.setAttribute("aria-expanded", "false");
   repositoryView.hidden = true;
   repositoryOpenButton.setAttribute("aria-expanded", "false");
   if (storeOpen && activeSurface === "attention") {
@@ -5159,6 +6072,7 @@ function openAttentionQueue(): void {
   appsView.hidden = true;
   agentsView.hidden = true;
   tasksView.hidden = true;
+  integrationView.hidden = true;
   repositoryView.hidden = true;
   attentionView.hidden = false;
   launchpadOpenButton.setAttribute("aria-expanded", "false");
@@ -6233,6 +7147,8 @@ function scheduleLaunchpadRefresh(): void {
 
 function openLaunchpad(): void {
   closeRepositoryQuickMenu();
+  integrationView.hidden = true;
+  integrationOpenButton.setAttribute("aria-expanded", "false");
   repositoryView.hidden = true;
   repositoryOpenButton.setAttribute("aria-expanded", "false");
   if (storeOpen && activeSurface === "launchpad") {
@@ -6247,6 +7163,7 @@ function openLaunchpad(): void {
   appsView.hidden = true;
   agentsView.hidden = true;
   tasksView.hidden = true;
+  integrationView.hidden = true;
   repositoryView.hidden = true;
   attentionView.hidden = true;
   launchpadOpenButton.setAttribute("aria-expanded", "true");
@@ -6956,6 +7873,8 @@ function scheduleStoreRefresh(): void {
 
 function openStore(category?: CatalogCategory | "", focusId?: string): void {
   closeRepositoryQuickMenu();
+  integrationView.hidden = true;
+  integrationOpenButton.setAttribute("aria-expanded", "false");
   repositoryView.hidden = true;
   repositoryOpenButton.setAttribute("aria-expanded", "false");
   if (category !== undefined) {
@@ -6999,6 +7918,8 @@ function openStore(category?: CatalogCategory | "", focusId?: string): void {
 
 function openMyApps(): void {
   closeRepositoryQuickMenu();
+  integrationView.hidden = true;
+  integrationOpenButton.setAttribute("aria-expanded", "false");
   repositoryView.hidden = true;
   repositoryOpenButton.setAttribute("aria-expanded", "false");
   if (storeOpen && activeSurface === "apps") {
@@ -7045,6 +7966,7 @@ function closeSurface(): void {
   appsView.hidden = true;
   agentsView.hidden = true;
   tasksView.hidden = true;
+  integrationView.hidden = true;
   repositoryView.hidden = true;
   attentionView.hidden = true;
   terminalShell.hidden = false;
@@ -7053,6 +7975,7 @@ function closeSurface(): void {
   appsOpenButton.setAttribute("aria-expanded", "false");
   agentsOpenButton.setAttribute("aria-expanded", "false");
   tasksOpenButton.setAttribute("aria-expanded", "false");
+  integrationOpenButton.setAttribute("aria-expanded", "false");
   repositoryOpenButton.setAttribute("aria-expanded", "false");
   attentionOpenButton.setAttribute("aria-expanded", "false");
   updateFocusedSession();
@@ -7077,12 +8000,14 @@ storeOpenButton.addEventListener("click", () => openStore());
 appsOpenButton.addEventListener("click", openMyApps);
 agentsOpenButton.addEventListener("click", openAgentCockpit);
 tasksOpenButton.addEventListener("click", openAgentTasks);
+integrationOpenButton.addEventListener("click", openIntegrationView);
 attentionOpenButton.addEventListener("click", openAttentionQueue);
 launchpadCloseButton.addEventListener("click", closeSurface);
 storeCloseButton.addEventListener("click", closeSurface);
 appsCloseButton.addEventListener("click", closeSurface);
 agentsCloseButton.addEventListener("click", closeSurface);
 tasksCloseButton.addEventListener("click", closeSurface);
+integrationCloseButton.addEventListener("click", closeSurface);
 attentionCloseButton.addEventListener("click", closeSurface);
 commandCloseButton.addEventListener("click", closeCommandOverlay);
 commandSearch.addEventListener("input", renderCommandList);
@@ -7148,6 +8073,33 @@ storeList.addEventListener("keydown", (event) => {
 appsSearch.addEventListener("input", scheduleMyAppsRefresh);
 agentSearch.addEventListener("input", scheduleAgentRefresh);
 tasksSearch.addEventListener("input", renderAgentTaskCenter);
+integrationRefreshButton.addEventListener("click", () => void refreshIntegrationState());
+integrationWorkstreams.addEventListener("keydown", (event) => {
+  if (event.key === "ArrowDown") {
+    event.preventDefault();
+    moveIntegrationWorkstreamSelection(1);
+  } else if (event.key === "ArrowUp") {
+    event.preventDefault();
+    moveIntegrationWorkstreamSelection(-1);
+  } else if (event.key === "Enter") {
+    event.preventDefault();
+    const activeRow = event.target instanceof HTMLButtonElement ? event.target : undefined;
+    if (activeRow?.dataset.integrationTaskId) selectIntegrationTask(activeRow.dataset.integrationTaskId, true);
+  }
+});
+integrationCandidates.addEventListener("keydown", (event) => {
+  if (event.key === "ArrowDown") {
+    event.preventDefault();
+    moveIntegrationCandidateSelection(1);
+  } else if (event.key === "ArrowUp") {
+    event.preventDefault();
+    moveIntegrationCandidateSelection(-1);
+  } else if (event.key === "Enter") {
+    event.preventDefault();
+    const activeRow = event.target instanceof HTMLButtonElement ? event.target : undefined;
+    if (activeRow?.dataset.integrationCandidateId) selectIntegrationCandidate(activeRow.dataset.integrationCandidateId, true);
+  }
+});
 repositorySections.addEventListener("keydown", (event) => {
   if (event.key === "ArrowDown") {
     event.preventDefault();

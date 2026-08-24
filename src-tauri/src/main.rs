@@ -2,6 +2,7 @@ mod agent;
 mod catalog;
 mod frame;
 mod installer;
+mod integration;
 mod launcher;
 mod pty;
 mod repository;
@@ -12,6 +13,7 @@ use agent::AgentSupervisorRuntime;
 use catalog::CatalogRuntime;
 use frame::FrameRuntime;
 use installer::InstallRuntime;
+use integration::IntegrationRuntime;
 use launcher::LaunchRuntime;
 use pty::SessionManager;
 use repository::RepositoryRuntime;
@@ -26,6 +28,7 @@ fn main() {
         .manage(InstallRuntime::default())
         .manage(LaunchRuntime::default())
         .manage(FrameRuntime::default())
+        .manage(IntegrationRuntime::default())
         .manage(SessionManager::default())
         .manage(RepositoryRuntime::default())
         .manage(AgentTaskRuntime::default())
@@ -68,6 +71,20 @@ fn main() {
             frame::frame_close_focused,
             frame::frame_close_tab,
             frame::frame_reset,
+            integration::integration_list,
+            integration::integration_inspect,
+            integration::integration_create,
+            integration::integration_refresh,
+            integration::integration_run_profile_save,
+            integration::integration_preview_start,
+            integration::integration_preview_status,
+            integration::integration_preview_stop,
+            integration::integration_validation_record,
+            integration::integration_rework_record,
+            integration::integration_readiness_set,
+            integration::integration_mark_published,
+            integration::integration_abandon,
+            integration::integration_cleanup,
             pty::create_session,
             pty::write_session,
             pty::resize_session,
