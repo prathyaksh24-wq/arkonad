@@ -199,7 +199,9 @@ impl RepositoryRuntime {
     pub fn snapshot(&self, request: RepositoryStatusRequest) -> Result<RepositorySnapshot, String> {
         let path = PathBuf::from(request.path.trim());
         if path.as_os_str().is_empty() {
-            return Ok(unknown_snapshot("No focused directory is available.".to_owned()));
+            return Ok(unknown_snapshot(
+                "No focused directory is available.".to_owned(),
+            ));
         }
         match resolve_repository_root(&path) {
             Ok(root) => inspect_repository(&root),
@@ -229,11 +231,17 @@ impl RepositoryRuntime {
                     .to_owned(),
             );
         }
-        let changed = parse_status(&run_git(&root, vec![
-            "status".to_owned(),
-            "--porcelain=v1".to_owned(),
-            "--untracked-files=all".to_owned(),
-        ])?);
+        let changed = parse_status(
+            &run_git(
+                &root,
+                vec![
+                    "status".to_owned(),
+                    "--porcelain=v1".to_owned(),
+                    "--untracked-files=all".to_owned(),
+                ],
+            )?
+            .stdout,
+        );
         if changed.is_empty() {
             return Ok(action_result(
                 "commit",
@@ -246,7 +254,12 @@ impl RepositoryRuntime {
         }
 
         let add_args = if request.include_all {
-            vec!["add".to_owned(), "-A".to_owned(), "--".to_owned(), ".".to_owned()]
+            vec![
+                "add".to_owned(),
+                "-A".to_owned(),
+                "--".to_owned(),
+                ".".to_owned(),
+            ]
         } else {
             let files = request
                 .files
@@ -281,7 +294,11 @@ impl RepositoryRuntime {
         }
         let commit = run_git(
             &root,
-            vec!["commit".to_owned(), "-m".to_owned(), request.message.trim().to_owned()],
+            vec![
+                "commit".to_owned(),
+                "-m".to_owned(),
+                request.message.trim().to_owned(),
+            ],
         )?;
         if !commit.success {
             return Err(git_failure("Git could not create the commit", &commit));
@@ -386,10 +403,7 @@ impl RepositoryRuntime {
         ))
     }
 
-    pub fn merge(
-        &self,
-        request: RepositoryMergeRequest,
-    ) -> Result<RepositoryActionResult, String> {
+    pub fn merge(&self, request: RepositoryMergeRequest) -> Result<RepositoryActionResult, String> {
         require_confirmation(request.confirmed)?;
         let _guard = self
             .action_lock
@@ -430,8 +444,15 @@ impl RepositoryRuntime {
         Ok(action_result(
             "merge",
             true,
-            format!("Merged PR #{} without deleting its branch.", request.pull_request_number),
-            format!("PR #{} · {}", request.pull_request_number, method.trim_start_matches('-')),
+            format!(
+                "Merged PR #{} without deleting its branch.",
+                request.pull_request_number
+            ),
+            format!(
+                "PR #{} · {}",
+                request.pull_request_number,
+                method.trim_start_matches('-')
+            ),
             bounded_join(&[result.stdout, result.stderr]),
             Some(inspect_repository(&root)?),
         ))
@@ -566,14 +587,17 @@ pub fn repository_cleanup_worktree(
 
 fn inspect_repository(root: &Path) -> Result<RepositorySnapshot, String> {
     let branch = optional_git_output(root, vec!["branch".to_owned(), "--show-current".to_owned()]);
-    let upstream = branch
-        .as_deref()
-        .and_then(|_| optional_git_output(root, vec![
-            "rev-parse".to_owned(),
-            "--abbrev-ref".to_owned(),
-            "--symbolic-full-name".to_owned(),
-            "@{upstream}".to_owned(),
-        ]));
+    let upstream = branch.as_deref().and_then(|_| {
+        optional_git_output(
+            root,
+            vec![
+                "rev-parse".to_owned(),
+                "--abbrev-ref".to_owned(),
+                "--symbolic-full-name".to_owned(),
+                "@{upstream}".to_owned(),
+            ],
+        )
+    });
     let (behind, ahead) = tracking_counts(root);
     let status_result = run_git(
         root,
@@ -648,15 +672,24 @@ fn inspect_repository(root: &Path) -> Result<RepositorySnapshot, String> {
         attention.push("Working tree has changes.".to_owned());
     }
     if !conflicts.is_empty() {
-        attention.push(format!("{} merge conflict(s) need attention.", conflicts.len()));
+        attention.push(format!(
+            "{} merge conflict(s) need attention.",
+            conflicts.len()
+        ));
     }
     if branch.is_none() {
-        attention.push("HEAD is detached; commit and push targets need an explicit branch.".to_owned());
+        attention
+            .push("HEAD is detached; commit and push targets need an explicit branch.".to_owned());
     } else if upstream.is_none() {
-        attention.push("The current branch has no upstream; push will need an explicit remote.".to_owned());
+        attention.push(
+            "The current branch has no upstream; push will need an explicit remote.".to_owned(),
+        );
     }
     if behind.is_some_and(|value| value > 0) {
-        attention.push(format!("The current branch is behind its upstream by {} commit(s).", behind.unwrap_or_default()));
+        attention.push(format!(
+            "The current branch is behind its upstream by {} commit(s).",
+            behind.unwrap_or_default()
+        ));
     }
     if !github.authenticated {
         attention.push(github.message.clone());
@@ -682,7 +715,7 @@ fn inspect_repository(root: &Path) -> Result<RepositorySnapshot, String> {
         behind,
         upstream,
         attention,
-        changed_files,
+        changed_files: changed_files.clone(),
         commits: parse_commits(
             &optional_git_output(
                 root,
@@ -744,7 +777,8 @@ fn unknown_snapshot(message: String) -> RepositorySnapshot {
             available: false,
             authenticated: false,
             repository: None,
-            message: "GitHub actions are unavailable until a GitHub repository is focused.".to_owned(),
+            message: "GitHub actions are unavailable until a GitHub repository is focused."
+                .to_owned(),
         },
         status_detail: message,
         refreshed_at: timestamp_millis(),
@@ -919,12 +953,12 @@ fn parse_track(value: &str) -> (Option<u32>, Option<u32>) {
     let ahead = value
         .split("ahead ")
         .nth(1)
-        .and_then(|value| value.split([',', ']').next())
+        .and_then(|value| value.split([',', ']']).next())
         .and_then(|value| value.trim().parse::<u32>().ok());
     let behind = value
         .split("behind ")
         .nth(1)
-        .and_then(|value| value.split([',', ']').next())
+        .and_then(|value| value.split([',', ']']).next())
         .and_then(|value| value.trim().parse::<u32>().ok());
     (ahead, behind)
 }
@@ -942,11 +976,14 @@ fn parse_remotes(value: &str) -> Vec<RepositoryRemote> {
     let mut remotes = BTreeMap::new();
     for line in value.lines() {
         let parts = line.split_whitespace().collect::<Vec<_>>();
-        if parts.len() >= 2 && (parts.get(2) == Some(&"(fetch)") || parts.get(2) == Some(&"(push)")) {
-            remotes.entry(parts[0].to_owned()).or_insert_with(|| RepositoryRemote {
-                name: parts[0].to_owned(),
-                url: parts[1].to_owned(),
-            });
+        if parts.len() >= 2 && (parts.get(2) == Some(&"(fetch)") || parts.get(2) == Some(&"(push)"))
+        {
+            remotes
+                .entry(parts[0].to_owned())
+                .or_insert_with(|| RepositoryRemote {
+                    name: parts[0].to_owned(),
+                    url: parts[1].to_owned(),
+                });
         }
     }
     remotes.into_values().collect()
@@ -960,7 +997,14 @@ fn parse_worktrees(value: &str, root: &Path) -> Vec<RepositoryWorktree> {
     let mut bare = false;
     for line in value.lines().chain(std::iter::once("")) {
         if let Some(value) = line.strip_prefix("worktree ") {
-            push_worktree(&mut worktrees, path.take(), head.clone(), branch.take(), bare, root);
+            push_worktree(
+                &mut worktrees,
+                path.take(),
+                head.clone(),
+                branch.take(),
+                bare,
+                root,
+            );
             path = Some(value.trim().to_owned());
             head.clear();
             bare = false;
@@ -971,7 +1015,14 @@ fn parse_worktrees(value: &str, root: &Path) -> Vec<RepositoryWorktree> {
         } else if line.trim() == "bare" {
             bare = true;
         } else if line.trim().is_empty() {
-            push_worktree(&mut worktrees, path.take(), head.clone(), branch.take(), bare, root);
+            push_worktree(
+                &mut worktrees,
+                path.take(),
+                head.clone(),
+                branch.take(),
+                bare,
+                root,
+            );
             head.clear();
             bare = false;
         }
@@ -1072,7 +1123,7 @@ fn probe_github(root: &Path, remotes: &[RepositoryRemote]) -> GitHubStatus {
         return GitHubStatus {
             available: false,
             authenticated: false,
-            repository,
+            repository: repository.clone(),
             message: "GitHub CLI is not installed. Local Git actions remain available.".to_owned(),
         };
     }
@@ -1085,13 +1136,14 @@ fn probe_github(root: &Path, remotes: &[RepositoryRemote]) -> GitHubStatus {
             available: true,
             authenticated: false,
             repository,
-            message: "GitHub CLI is not authenticated. Local Git actions remain available.".to_owned(),
+            message: "GitHub CLI is not authenticated. Local Git actions remain available."
+                .to_owned(),
         };
     }
     GitHubStatus {
         available: true,
         authenticated: true,
-        repository,
+        repository: repository.clone(),
         message: if repository.is_some() {
             "GitHub actions are available after explicit confirmation.".to_owned()
         } else {
@@ -1113,7 +1165,8 @@ fn list_reviews(root: &Path, branch: &str) -> Result<Vec<RepositoryReview>, Stri
             "--limit".to_owned(),
             "20".to_owned(),
             "--json".to_owned(),
-            "number,title,url,state,isDraft,reviewDecision,headRefName,baseRefName,headRefOid".to_owned(),
+            "number,title,url,state,isDraft,reviewDecision,headRefName,baseRefName,headRefOid"
+                .to_owned(),
         ],
     )?;
     if !result.success {
@@ -1161,16 +1214,25 @@ fn github_repository_name(url: &str) -> Option<String> {
 }
 
 fn require_github_auth(root: &Path) -> Result<(), String> {
-    let remotes = parse_remotes(&optional_git_output(root, vec!["remote".to_owned(), "-v".to_owned()]).unwrap_or_default());
+    let remotes = parse_remotes(
+        &optional_git_output(root, vec!["remote".to_owned(), "-v".to_owned()]).unwrap_or_default(),
+    );
     let status = probe_github(root, &remotes);
     if !status.available {
-        return Err("This GitHub action needs the gh CLI. Local Git actions remain available.".to_owned());
+        return Err(
+            "This GitHub action needs the gh CLI. Local Git actions remain available.".to_owned(),
+        );
     }
     if !status.authenticated {
-        return Err("This GitHub action needs an authenticated gh CLI. Local Git actions remain available.".to_owned());
+        return Err(
+            "This GitHub action needs an authenticated gh CLI. Local Git actions remain available."
+                .to_owned(),
+        );
     }
     if status.repository.is_none() {
-        return Err("This GitHub action needs a GitHub remote on the focused repository.".to_owned());
+        return Err(
+            "This GitHub action needs a GitHub remote on the focused repository.".to_owned(),
+        );
     }
     Ok(())
 }
@@ -1178,7 +1240,9 @@ fn require_github_auth(root: &Path) -> Result<(), String> {
 fn validate_repository_relative_path(value: &str) -> Result<String, String> {
     let value = value.trim();
     if value.is_empty() || value.chars().any(char::is_control) {
-        return Err("A selected repository path is empty or contains control characters.".to_owned());
+        return Err(
+            "A selected repository path is empty or contains control characters.".to_owned(),
+        );
     }
     let path = Path::new(value);
     let has_windows_drive_prefix = value.as_bytes().get(1) == Some(&b':');
@@ -1193,7 +1257,9 @@ fn validate_repository_relative_path(value: &str) -> Result<String, String> {
             .components()
             .any(|component| !matches!(component, Component::Normal(_)))
     {
-        return Err(format!("Selected repository path is not a safe relative path: {value}"));
+        return Err(format!(
+            "Selected repository path is not a safe relative path: {value}"
+        ));
     }
     Ok(value.to_owned())
 }
@@ -1230,7 +1296,10 @@ fn require_confirmation(confirmed: bool) -> Result<(), String> {
     if confirmed {
         Ok(())
     } else {
-        Err("The action was not confirmed. Review the exact target before changing the repository.".to_owned())
+        Err(
+            "The action was not confirmed. Review the exact target before changing the repository."
+                .to_owned(),
+        )
     }
 }
 
@@ -1375,7 +1444,9 @@ mod tests {
 
     #[test]
     fn parses_branch_tracking_metadata() {
-        let branches = parse_branches("main\u{1f}*\u{1f}origin/main\u{1f}[ahead 1]\nfeature\u{1f}\u{1f}\u{1f}\n");
+        let branches = parse_branches(
+            "main\u{1f}*\u{1f}origin/main\u{1f}[ahead 1]\nfeature\u{1f}\u{1f}\u{1f}\n",
+        );
         assert_eq!(branches[0].name, "main");
         assert!(branches[0].current);
         assert_eq!(branches[0].ahead, Some(1));
@@ -1399,7 +1470,10 @@ mod tests {
 
     #[test]
     fn accepts_only_safe_relative_repository_paths() {
-        assert_eq!(validate_repository_relative_path("src/main.ts").unwrap(), "src/main.ts");
+        assert_eq!(
+            validate_repository_relative_path("src/main.ts").unwrap(),
+            "src/main.ts"
+        );
         assert!(validate_repository_relative_path("../outside.txt").is_err());
         assert!(validate_repository_relative_path(r"..\outside.txt").is_err());
         assert!(validate_repository_relative_path("C:\\outside.txt").is_err());
@@ -1407,9 +1481,18 @@ mod tests {
 
     #[test]
     fn extracts_github_repository_names_from_common_remote_urls() {
-        assert_eq!(github_repository_name("git@github.com:owner/repo.git"), Some("owner/repo".to_owned()));
-        assert_eq!(github_repository_name("https://github.com/owner/repo"), Some("owner/repo".to_owned()));
-        assert_eq!(github_repository_name("https://example.com/owner/repo"), None);
+        assert_eq!(
+            github_repository_name("git@github.com:owner/repo.git"),
+            Some("owner/repo".to_owned())
+        );
+        assert_eq!(
+            github_repository_name("https://github.com/owner/repo"),
+            Some("owner/repo".to_owned())
+        );
+        assert_eq!(
+            github_repository_name("https://example.com/owner/repo"),
+            None
+        );
     }
 
     #[test]
@@ -1430,7 +1513,10 @@ mod tests {
         assert!(require_confirmation(false).is_err());
         assert!(validate_git_name("-main", "branch").is_err());
         assert!(validate_git_name("feature branch", "branch").is_err());
-        assert_eq!(validate_git_name("feature/ui", "branch").unwrap(), "feature/ui");
+        assert_eq!(
+            validate_git_name("feature/ui", "branch").unwrap(),
+            "feature/ui"
+        );
     }
 
     #[test]

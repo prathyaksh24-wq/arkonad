@@ -1581,6 +1581,65 @@ select {
   overflow-wrap: anywhere;
 }
 
+.integration-view .store-content {
+  grid-template-columns: minmax(230px, 0.72fr) minmax(420px, 1.7fr);
+}
+
+.integration-view .store-list-panel {
+  grid-template-rows: minmax(31px, auto) minmax(0, 1fr) minmax(31px, auto) minmax(0, 0.72fr);
+}
+
+.integration-view .integration-candidates-heading {
+  border-top: 1px solid #202830;
+}
+
+.integration-view .store-row:disabled {
+  cursor: not-allowed;
+  opacity: 0.58;
+}
+
+.integration-view .detail-item {
+  display: grid;
+  gap: 3px;
+  margin-top: 7px;
+  padding: 8px;
+  border: 1px solid #29343d;
+  background: #0c1014;
+}
+
+.integration-view .detail-item strong {
+  color: #e8ecef;
+  font-size: 11px;
+}
+
+.integration-view .install-log,
+.integration-view .task-plan-evidence {
+  max-height: 180px;
+  overflow: auto;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.agent-task-field input,
+.agent-task-field select {
+  min-width: 0;
+  padding: 7px;
+  border: 1px solid #303b45;
+  border-radius: 2px;
+  outline: none;
+  background: #10161b;
+  color: #e8ecef;
+  font: inherit;
+  font-size: 11px;
+  text-transform: none;
+}
+
+.agent-task-field input:focus,
+.agent-task-field select:focus {
+  border-color: #ff9c4a;
+  box-shadow: 0 0 0 1px rgba(255, 156, 74, 0.15);
+}
+
 .repository-indicator {
   max-width: 255px;
   overflow: hidden;
