@@ -4,6 +4,7 @@ mod frame;
 mod installer;
 mod launcher;
 mod pty;
+mod repository;
 mod task;
 mod workspace;
 
@@ -13,6 +14,7 @@ use frame::FrameRuntime;
 use installer::InstallRuntime;
 use launcher::LaunchRuntime;
 use pty::SessionManager;
+use repository::RepositoryRuntime;
 use task::AgentTaskRuntime;
 use workspace::WorkspaceRuntime;
 
@@ -25,6 +27,7 @@ fn main() {
         .manage(LaunchRuntime::default())
         .manage(FrameRuntime::default())
         .manage(SessionManager::default())
+        .manage(RepositoryRuntime::default())
         .manage(AgentTaskRuntime::default())
         .manage(WorkspaceRuntime::default())
         .invoke_handler(tauri::generate_handler![
@@ -69,6 +72,12 @@ fn main() {
             pty::write_session,
             pty::resize_session,
             pty::close_session,
+            repository::repository_snapshot,
+            repository::repository_commit,
+            repository::repository_push,
+            repository::repository_create_draft_pr,
+            repository::repository_merge_pr,
+            repository::repository_cleanup_worktree,
             task::agent_task_list,
             task::agent_task_plan,
             task::agent_task_create,

@@ -382,6 +382,119 @@ type AgentTaskCancelResult = {
   message: string;
 };
 
+type RepositoryStatus = "ready" | "unknown";
+type RepositorySection =
+  | "summary"
+  | "changedFiles"
+  | "commits"
+  | "branches"
+  | "worktrees"
+  | "reviews"
+  | "conflicts"
+  | "cleanup";
+
+type RepositoryChangedFile = {
+  path: string;
+  status: string;
+  staged: boolean;
+  changedInWorktree: boolean;
+  untracked: boolean;
+};
+
+type RepositoryCommit = {
+  hash: string;
+  shortHash: string;
+  subject: string;
+  author: string;
+  authoredAt: string;
+};
+
+type RepositoryBranch = {
+  name: string;
+  current: boolean;
+  upstream: string | null;
+  ahead: number | null;
+  behind: number | null;
+};
+
+type RepositoryWorktree = {
+  path: string;
+  head: string;
+  branch: string | null;
+  detached: boolean;
+  bare: boolean;
+  dirty: boolean;
+  cleanupEligible: boolean;
+  cleanupReason: string;
+};
+
+type RepositoryReview = {
+  number: number;
+  title: string;
+  url: string;
+  state: string;
+  isDraft: boolean;
+  reviewDecision: string | null;
+  headBranch: string;
+  baseBranch: string;
+  headSha: string | null;
+};
+
+type RepositoryCleanupCandidate = {
+  id: string;
+  kind: string;
+  target: string;
+  branch: string | null;
+  dirty: boolean;
+  allowed: boolean;
+  reason: string;
+};
+
+type RepositoryRemote = {
+  name: string;
+  url: string;
+};
+
+type GitHubStatus = {
+  available: boolean;
+  authenticated: boolean;
+  repository: string | null;
+  message: string;
+};
+
+type RepositorySnapshot = {
+  status: RepositoryStatus;
+  repositoryRoot: string | null;
+  repositoryName: string | null;
+  branch: string | null;
+  suggestedBaseBranch: string | null;
+  dirty: boolean;
+  ahead: number | null;
+  behind: number | null;
+  upstream: string | null;
+  attention: string[];
+  changedFiles: RepositoryChangedFile[];
+  commits: RepositoryCommit[];
+  branches: RepositoryBranch[];
+  worktrees: RepositoryWorktree[];
+  reviews: RepositoryReview[];
+  conflicts: string[];
+  cleanupCandidates: RepositoryCleanupCandidate[];
+  remotes: RepositoryRemote[];
+  github: GitHubStatus;
+  statusDetail: string;
+  refreshedAt: string;
+};
+
+type RepositoryActionResult = {
+  action: string;
+  success: boolean;
+  message: string;
+  target: string;
+  logs: string;
+  snapshot: RepositorySnapshot | null;
+};
+
 type LaunchpadEntry = {
   id: string;
   source: "catalog" | "custom";
@@ -740,6 +853,10 @@ app.innerHTML = `
     <header class="topbar">
       <div class="brand"><span class="ember">◆</span><span>arkonad</span></div>
       <div class="session-meta" data-session-meta>starting terminal session…</div>
+      <button class="topbar-action repository-indicator" type="button" data-repository-open aria-expanded="false">
+        Repo <span class="repository-indicator-value" data-repository-indicator>no repository</span>
+        <span class="attention-badge" data-repository-attention hidden aria-live="polite"></span>
+      </button>
       <button class="topbar-action" type="button" data-launchpad-open aria-expanded="false">
         Launchpad <span class="key-hint">palette</span>
       </button>
@@ -1077,6 +1194,47 @@ app.innerHTML = `
           <span>Esc terminal</span>
         </div>
       </section>
+      <section class="store-shell repository-view" data-repository-view hidden aria-label="Repository View">
+        <div class="store-toolbar">
+          <div class="store-heading">
+            <span class="store-eyebrow">REPOSITORY VIEW</span>
+            <span class="store-title" data-repository-title>Repository status</span>
+          </div>
+          <button class="detail-action" type="button" data-repository-refresh>Refresh</button>
+          <button class="store-close" type="button" data-repository-close>Esc · terminal</button>
+        </div>
+        <div class="store-notice" data-repository-notice>
+          Git status is read-only until you choose an exact action.
+        </div>
+        <div class="store-content repository-content">
+          <section class="store-list-panel" aria-label="Repository sections">
+            <div class="store-list-header">
+              <span>Repository</span>
+              <span data-repository-count>loading…</span>
+            </div>
+            <div class="store-list repository-sections" data-repository-sections role="listbox" aria-label="Repository sections"></div>
+          </section>
+          <article class="store-detail repository-detail" data-repository-detail aria-live="polite"></article>
+        </div>
+        <div class="store-footer">
+          <span>↑↓ choose section</span>
+          <span>Enter inspect</span>
+          <span>GitHub actions are explicit</span>
+          <span>Esc terminal</span>
+        </div>
+      </section>
+      <section class="repository-quick-menu" data-repository-quick hidden role="dialog" aria-modal="true" aria-labelledby="repository-quick-title">
+        <div class="repository-quick-card">
+          <div class="command-heading">
+            <div>
+              <span class="store-eyebrow">REPOSITORY</span>
+              <span class="store-title" id="repository-quick-title">Focused checkout</span>
+            </div>
+            <button class="store-close" type="button" data-repository-quick-close>Esc · close</button>
+          </div>
+          <div data-repository-quick-content></div>
+        </div>
+      </section>
     </main>
     <footer class="bottombar">
       <span>Leader opens commands</span>
@@ -1084,6 +1242,7 @@ app.innerHTML = `
       <span>Palette: Store</span>
       <span>Palette: My Apps</span>
       <span>Palette: Agent Tasks</span>
+      <span>Palette: Repository</span>
       <span>Palette: Attention</span>
       <span>Palette: New Tab</span>
       <span>Palette: Split</span>
@@ -1100,6 +1259,9 @@ const onboardingMessage = app.querySelector<HTMLParagraphElement>("[data-onboard
 const frameTabs = app.querySelector<HTMLDivElement>("[data-frame-tabs]")!;
 const frameLayout = app.querySelector<HTMLDivElement>("[data-frame-layout]")!;
 const sessionMeta = app.querySelector<HTMLDivElement>("[data-session-meta]")!;
+const repositoryOpenButton = app.querySelector<HTMLButtonElement>("[data-repository-open]")!;
+const repositoryIndicator = app.querySelector<HTMLSpanElement>("[data-repository-indicator]")!;
+const repositoryAttention = app.querySelector<HTMLSpanElement>("[data-repository-attention]")!;
 const status = app.querySelector<HTMLDivElement>("[data-status]")!;
 const cwdLabel = app.querySelector<HTMLSpanElement>("[data-cwd]")!;
 const errorPanel = app.querySelector<HTMLDivElement>("[data-error]")!;
@@ -1158,6 +1320,17 @@ const tasksCount = app.querySelector<HTMLSpanElement>("[data-tasks-count]")!;
 const tasksList = app.querySelector<HTMLDivElement>("[data-tasks-list]")!;
 const tasksError = app.querySelector<HTMLDivElement>("[data-tasks-error]")!;
 const tasksDetail = app.querySelector<HTMLElement>("[data-tasks-detail]")!;
+const repositoryView = app.querySelector<HTMLElement>("[data-repository-view]")!;
+const repositoryTitle = app.querySelector<HTMLSpanElement>("[data-repository-title]")!;
+const repositoryRefreshButton = app.querySelector<HTMLButtonElement>("[data-repository-refresh]")!;
+const repositoryCloseButton = app.querySelector<HTMLButtonElement>("[data-repository-close]")!;
+const repositoryNotice = app.querySelector<HTMLDivElement>("[data-repository-notice]")!;
+const repositoryCount = app.querySelector<HTMLSpanElement>("[data-repository-count]")!;
+const repositorySections = app.querySelector<HTMLDivElement>("[data-repository-sections]")!;
+const repositoryDetail = app.querySelector<HTMLElement>("[data-repository-detail]")!;
+const repositoryQuick = app.querySelector<HTMLElement>("[data-repository-quick]")!;
+const repositoryQuickCloseButton = app.querySelector<HTMLButtonElement>("[data-repository-quick-close]")!;
+const repositoryQuickContent = app.querySelector<HTMLElement>("[data-repository-quick-content]")!;
 const attentionView = app.querySelector<HTMLElement>("[data-attention-view]")!;
 const attentionCloseButton = app.querySelector<HTMLButtonElement>("[data-attention-close]")!;
 const attentionSearch = app.querySelector<HTMLInputElement>("[data-attention-search]")!;
@@ -1182,6 +1355,9 @@ if (
   !frameTabs ||
   !frameLayout ||
   !sessionMeta ||
+  !repositoryOpenButton ||
+  !repositoryIndicator ||
+  !repositoryAttention ||
   !status ||
   !cwdLabel ||
   !errorPanel ||
@@ -1240,6 +1416,17 @@ if (
   !tasksList ||
   !tasksError ||
   !tasksDetail ||
+  !repositoryView ||
+  !repositoryTitle ||
+  !repositoryRefreshButton ||
+  !repositoryCloseButton ||
+  !repositoryNotice ||
+  !repositoryCount ||
+  !repositorySections ||
+  !repositoryDetail ||
+  !repositoryQuick ||
+  !repositoryQuickCloseButton ||
+  !repositoryQuickContent ||
   !attentionView ||
   !attentionCloseButton ||
   !attentionSearch ||
@@ -1277,7 +1464,7 @@ let resizeTimer: number | undefined;
 let terminalStatusText = "connecting";
 let terminalStatusState = "";
 let storeOpen = false;
-let activeSurface: "launchpad" | "store" | "apps" | "agents" | "tasks" | "attention" = "launchpad";
+let activeSurface: "launchpad" | "store" | "apps" | "agents" | "tasks" | "repository" | "attention" = "launchpad";
 let launchpadEntries: LaunchpadEntry[] = [];
 let selectedLaunchpadId: string | undefined;
 let launchpadRequestId = 0;
@@ -1312,6 +1499,14 @@ let taskDraftBaseBranch = "";
 let taskDraftBranch = "";
 let taskDraftWorktreeRoot = "";
 let taskDraftEntryId: string | undefined;
+let repositorySnapshot: RepositorySnapshot | undefined;
+let selectedRepositorySection: RepositorySection = "summary";
+let repositoryRequestId = 0;
+let repositoryRefreshTimer: number | undefined;
+let repositoryQuickOpen = false;
+let repositoryActionBusy = false;
+let repositoryNoticeOverride = "";
+let lastRepositoryPath = "";
 let agentSupervision: AgentSupervisionSnapshot = { sessions: [], adapters: [] };
 let selectedSupervisionId: string | undefined;
 let attentionRequestId = 0;
@@ -1384,6 +1579,7 @@ function updateFocusedSession(): void {
   sessionMeta.textContent = session?.shell ?? "no active session";
   cwdLabel.textContent = session?.cwd ?? "";
   rememberLastWorkspace(session?.cwd);
+  scheduleRepositoryRefresh();
 }
 
 function sendResizeForPane(runtime: PaneRuntime): void {
@@ -1438,6 +1634,7 @@ function lastWorkspacePath(): string | null {
 }
 
 function setTopbarActionsDisabled(disabled: boolean): void {
+  repositoryOpenButton.disabled = disabled;
   launchpadOpenButton.disabled = disabled;
   storeOpenButton.disabled = disabled;
   appsOpenButton.disabled = disabled;
@@ -1545,7 +1742,9 @@ function openOnboarding(): void {
   appsView.hidden = true;
   agentsView.hidden = true;
   tasksView.hidden = true;
+  repositoryView.hidden = true;
   attentionView.hidden = true;
+  closeRepositoryQuickMenu();
   storeOpen = false;
   setTopbarActionsDisabled(true);
   sessionMeta.textContent = "first run";
@@ -2072,8 +2271,11 @@ function frameCommands(): FrameCommand[] {
     {
       id: "repository",
       label: "Repository",
-      description: "Open repository controls for the focused session.",
-      run: () => showCommandMessage("Repository view will use the focused session's Repository Context."),
+      description: "Open repository status, Git actions, reviews, and safe cleanup.",
+      run: () => {
+        closeCommandOverlay();
+        openRepositoryView();
+      },
     },
     {
       id: "settings",
@@ -3333,6 +3535,9 @@ function scheduleAgentRefresh(): void {
 }
 
 function openAgentCockpit(): void {
+  closeRepositoryQuickMenu();
+  repositoryView.hidden = true;
+  repositoryOpenButton.setAttribute("aria-expanded", "false");
   if (storeOpen && activeSurface === "agents") {
     agentSearch.focus();
     return;
@@ -3345,6 +3550,7 @@ function openAgentCockpit(): void {
   appsView.hidden = true;
   agentsView.hidden = false;
   tasksView.hidden = true;
+  repositoryView.hidden = true;
   attentionView.hidden = true;
   launchpadOpenButton.setAttribute("aria-expanded", "false");
   storeOpenButton.setAttribute("aria-expanded", "false");
@@ -4031,6 +4237,9 @@ async function refreshAgentTasks(): Promise<void> {
 }
 
 function openAgentTasks(): void {
+  closeRepositoryQuickMenu();
+  repositoryView.hidden = true;
+  repositoryOpenButton.setAttribute("aria-expanded", "false");
   if (storeOpen && activeSurface === "tasks") {
     tasksSearch.focus();
     return;
@@ -4043,6 +4252,7 @@ function openAgentTasks(): void {
   appsView.hidden = true;
   agentsView.hidden = true;
   tasksView.hidden = false;
+  repositoryView.hidden = true;
   attentionView.hidden = true;
   launchpadOpenButton.setAttribute("aria-expanded", "false");
   storeOpenButton.setAttribute("aria-expanded", "false");
@@ -4302,7 +4512,641 @@ async function cancelAgentTask(task: AgentTask): Promise<void> {
   }
 }
 
+const repositorySectionMeta: Array<{ id: RepositorySection; label: string }> = [
+  { id: "summary", label: "Status" },
+  { id: "changedFiles", label: "Changed files" },
+  { id: "commits", label: "Commits" },
+  { id: "branches", label: "Branches" },
+  { id: "worktrees", label: "Worktrees" },
+  { id: "reviews", label: "Reviews" },
+  { id: "conflicts", label: "Conflicts" },
+  { id: "cleanup", label: "Cleanup" },
+];
+
+function repositoryPath(): string {
+  return (
+    focusedPane()?.session.cwd ??
+    pendingWorkspace?.repositoryRoot ??
+    pendingWorkspace?.root ??
+    lastWorkspacePath() ??
+    ""
+  );
+}
+
+function repositorySectionCount(snapshot: RepositorySnapshot, section: RepositorySection): string {
+  switch (section) {
+    case "changedFiles":
+      return String(snapshot.changedFiles.length);
+    case "commits":
+      return String(snapshot.commits.length);
+    case "branches":
+      return String(snapshot.branches.length);
+    case "worktrees":
+      return String(snapshot.worktrees.length);
+    case "reviews":
+      return String(snapshot.reviews.length);
+    case "conflicts":
+      return String(snapshot.conflicts.length);
+    case "cleanup":
+      return String(snapshot.cleanupCandidates.length);
+    default:
+      return "";
+  }
+}
+
+function repositoryStatusLabel(snapshot: RepositorySnapshot): string {
+  if (snapshot.status === "unknown") {
+    return "not a Git repository";
+  }
+  const branch = snapshot.branch ?? "detached HEAD";
+  const dirty = snapshot.dirty ? " · dirty" : " · clean";
+  const tracking =
+    snapshot.ahead !== null || snapshot.behind !== null
+      ? ` · ↑${snapshot.ahead ?? 0} ↓${snapshot.behind ?? 0}`
+      : "";
+  return `${branch}${dirty}${tracking}`;
+}
+
+function renderRepositoryIndicator(): void {
+  const snapshot = repositorySnapshot;
+  if (!snapshot || snapshot.status === "unknown") {
+    repositoryIndicator.textContent = "no repository";
+    repositoryAttention.hidden = true;
+    repositoryOpenButton.title = snapshot?.statusDetail ?? "Focus a directory inside a Git repository.";
+    return;
+  }
+  const name = snapshot.repositoryName ?? "repository";
+  const tracking = snapshot.ahead !== null || snapshot.behind !== null
+    ? ` · ↑${snapshot.ahead ?? 0} ↓${snapshot.behind ?? 0}`
+    : "";
+  repositoryIndicator.textContent = `${name} · ${snapshot.branch ?? "detached"}${snapshot.dirty ? " *" : ""}${tracking}`;
+  repositoryAttention.hidden = snapshot.attention.length === 0;
+  repositoryAttention.textContent = snapshot.attention.length > 0 ? String(snapshot.attention.length) : "";
+  repositoryOpenButton.title = snapshot.attention.length > 0
+    ? snapshot.attention.join(" ")
+    : "Repository is ready for review.";
+}
+
+function scheduleRepositoryRefresh(): void {
+  const path = repositoryPath();
+  if (path === lastRepositoryPath && repositorySnapshot) {
+    return;
+  }
+  lastRepositoryPath = path;
+  if (repositoryRefreshTimer !== undefined) {
+    window.clearTimeout(repositoryRefreshTimer);
+  }
+  repositoryRefreshTimer = window.setTimeout(() => {
+    repositoryRefreshTimer = undefined;
+    void refreshRepository();
+  }, 150);
+}
+
+async function refreshRepository(): Promise<void> {
+  const requestId = ++repositoryRequestId;
+  const path = repositoryPath();
+  lastRepositoryPath = path;
+  repositoryNoticeOverride = "";
+  repositoryNotice.textContent = "Reading Git status, branches, Worktrees, reviews, and cleanup candidates…";
+  try {
+    const snapshot = await invoke<RepositorySnapshot>("repository_snapshot", {
+      request: { path },
+    });
+    if (requestId !== repositoryRequestId) {
+      return;
+    }
+    repositorySnapshot = snapshot;
+    renderRepositoryIndicator();
+    if (activeSurface === "repository") {
+      renderRepositoryView();
+    }
+    if (repositoryQuickOpen) {
+      renderRepositoryQuickMenu();
+    }
+  } catch (error) {
+    if (requestId !== repositoryRequestId) {
+      return;
+    }
+    repositorySnapshot = undefined;
+    repositoryIndicator.textContent = "status unavailable";
+    repositoryAttention.hidden = false;
+    repositoryAttention.textContent = "!";
+    repositoryOpenButton.title = String(error);
+    repositoryNotice.textContent = `Could not read repository status: ${String(error)}`;
+    if (activeSurface === "repository") {
+      repositoryDetail.replaceChildren(makeElement("p", "detail-empty", repositoryNotice.textContent));
+    }
+  }
+}
+
+function repositoryActionButton(
+  label: string,
+  action: () => void,
+  disabled = false,
+): HTMLButtonElement {
+  const button = makeElement("button", "detail-action", label) as HTMLButtonElement;
+  button.type = "button";
+  button.disabled = disabled || repositoryActionBusy;
+  button.addEventListener("click", action);
+  return button;
+}
+
+function repositoryFormField(
+  parent: HTMLElement,
+  label: string,
+  value: string,
+  kind: "input" | "textarea" = "input",
+): HTMLInputElement | HTMLTextAreaElement {
+  const wrapper = makeElement("label", "repository-form-field");
+  wrapper.append(makeElement("span", undefined, label));
+  const control = makeElement(kind, "repository-form-input") as HTMLInputElement | HTMLTextAreaElement;
+  control.value = value;
+  if (kind === "textarea") {
+    (control as HTMLTextAreaElement).rows = 4;
+  }
+  wrapper.append(control);
+  parent.append(wrapper);
+  return control;
+}
+
+function repositoryConfirmation(message: string): boolean {
+  return window.confirm(`${message}\n\nArkonad will not perform this action unless you confirm it.`);
+}
+
+async function executeRepositoryAction(
+  command: string,
+  request: Record<string, unknown>,
+): Promise<void> {
+  if (repositoryActionBusy) {
+    return;
+  }
+  repositoryActionBusy = true;
+  repositoryNotice.textContent = "Running the explicitly confirmed repository action…";
+  try {
+    const result = await invoke<RepositoryActionResult>(command, { request: { ...request, confirmed: true } });
+    repositoryActionBusy = false;
+    if (result.snapshot) {
+      repositorySnapshot = result.snapshot;
+      renderRepositoryIndicator();
+    }
+    repositoryNoticeOverride = result.message;
+    renderRepositoryView();
+    repositoryNotice.textContent = `${result.message} Target: ${result.target}`;
+    if (result.logs.trim()) {
+      repositoryDetail.append(makeElement("pre", "repository-action-log", result.logs));
+    }
+  } catch (error) {
+    repositoryActionBusy = false;
+    repositoryNoticeOverride = `Repository action stopped: ${String(error)}`;
+    renderRepositoryView();
+    repositoryNotice.textContent = repositoryNoticeOverride;
+  }
+}
+
+function renderRepositoryCommitForm(parent: HTMLElement, snapshot: RepositorySnapshot): void {
+  const form = makeElement("form", "repository-action-form");
+  form.append(makeElement("strong", "repository-form-title", "Commit changes"));
+  appendDetailLine(
+    form,
+    "Exact target",
+    `${snapshot.repositoryRoot ?? "unknown"} · ${snapshot.branch ?? "detached HEAD"} · all ${snapshot.changedFiles.length} visible path(s)`,
+  );
+  const message = repositoryFormField(form, "Commit message", "");
+  message.setAttribute("placeholder", "Describe why these repository changes belong together");
+  const submit = makeElement("button", "detail-action", "Commit all visible changes") as HTMLButtonElement;
+  submit.type = "submit";
+  form.append(submit);
+  form.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const value = message.value.trim();
+    if (!value) {
+      repositoryNotice.textContent = "Enter a commit message before committing.";
+      return;
+    }
+    const paths = snapshot.changedFiles.map((file) => file.path).join("\n");
+    if (!repositoryConfirmation(`Commit on ${snapshot.branch ?? "detached HEAD"} in ${snapshot.repositoryRoot}?\n\n${paths}`)) {
+      return;
+    }
+    void executeRepositoryAction("repository_commit", {
+      path: snapshot.repositoryRoot ?? repositoryPath(),
+      message: value,
+      files: [],
+      includeAll: true,
+    });
+  });
+  parent.append(form);
+}
+
+function renderRepositoryPushForm(parent: HTMLElement, snapshot: RepositorySnapshot): void {
+  const form = makeElement("form", "repository-action-form");
+  form.append(makeElement("strong", "repository-form-title", "Push branch"));
+  const remote = makeElement("select", "repository-form-input") as HTMLSelectElement;
+  remote.setAttribute("aria-label", "Push remote");
+  for (const candidate of snapshot.remotes) {
+    const option = makeElement("option", undefined, `${candidate.name} · ${candidate.url}`) as HTMLOptionElement;
+    option.value = candidate.name;
+    remote.append(option);
+  }
+  const remoteLabel = makeElement("label", "repository-form-field");
+  remoteLabel.append(makeElement("span", undefined, "Remote"), remote);
+  form.append(remoteLabel);
+  const targetLine = makeElement("div", "detail-line");
+  targetLine.append(makeElement("span", "detail-label", "Exact target"));
+  const targetValue = makeElement("span", "detail-value");
+  targetLine.append(targetValue);
+  form.append(targetLine);
+  const updateTarget = (): void => {
+    targetValue.textContent = `${remote.value || "remote"}/${snapshot.branch ?? "detached HEAD"}`;
+  };
+  remote.addEventListener("change", updateTarget);
+  updateTarget();
+  const tracking = makeElement("label", "repository-form-check");
+  const setUpstream = makeElement("input") as HTMLInputElement;
+  setUpstream.type = "checkbox";
+  setUpstream.checked = true;
+  tracking.append(setUpstream, makeElement("span", undefined, "Set upstream if this branch has none"));
+  form.append(tracking);
+  const submit = makeElement("button", "detail-action", "Push exact branch") as HTMLButtonElement;
+  submit.type = "submit";
+  form.append(submit);
+  form.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const selected = snapshot.remotes.find((candidate) => candidate.name === remote.value);
+    if (!selected || !snapshot.branch) {
+      repositoryNotice.textContent = "A remote and current branch are required before pushing.";
+      return;
+    }
+    if (!repositoryConfirmation(`Push ${snapshot.branch} to ${selected.name} (${selected.url})?`)) {
+      return;
+    }
+    void executeRepositoryAction("repository_push", {
+      path: snapshot.repositoryRoot ?? repositoryPath(),
+      remote: selected.name,
+      branch: snapshot.branch,
+      setUpstream: setUpstream.checked,
+    });
+  });
+  parent.append(form);
+}
+
+function renderRepositoryDraftPrForm(parent: HTMLElement, snapshot: RepositorySnapshot): void {
+  const form = makeElement("form", "repository-action-form");
+  form.append(makeElement("strong", "repository-form-title", "Create draft PR"));
+  const targetLine = makeElement("div", "detail-line");
+  targetLine.append(makeElement("span", "detail-label", "Exact target"));
+  const targetValue = makeElement("span", "detail-value");
+  targetLine.append(targetValue);
+  form.append(targetLine);
+  appendDetailLine(form, "GitHub", snapshot.github.repository ?? "GitHub remote not detected");
+  const base = repositoryFormField(form, "Base branch", snapshot.suggestedBaseBranch ?? "main") as HTMLInputElement;
+  const title = repositoryFormField(form, "Title", snapshot.branch ? `Changes from ${snapshot.branch}` : "Repository changes") as HTMLInputElement;
+  const body = repositoryFormField(form, "Description", "Explain what changed and why.", "textarea") as HTMLTextAreaElement;
+  const updateTarget = (): void => {
+    targetValue.textContent = `${snapshot.branch ?? "detached HEAD"} → ${base.value.trim() || "main"}`;
+  };
+  base.addEventListener("input", updateTarget);
+  updateTarget();
+  const submit = makeElement("button", "detail-action", "Create draft PR") as HTMLButtonElement;
+  submit.type = "submit";
+  submit.disabled = !snapshot.github.available || !snapshot.github.authenticated || !snapshot.branch;
+  form.append(submit);
+  form.addEventListener("submit", (event) => {
+    event.preventDefault();
+    if (!snapshot.branch || !snapshot.github.authenticated) {
+      repositoryNotice.textContent = snapshot.github.message;
+      return;
+    }
+    if (!repositoryConfirmation(`Create a draft PR from ${snapshot.branch} into ${base.value.trim() || "main"} on ${snapshot.github.repository ?? "the GitHub remote"}?`)) {
+      return;
+    }
+    void executeRepositoryAction("repository_create_draft_pr", {
+      path: snapshot.repositoryRoot ?? repositoryPath(),
+      baseBranch: base.value.trim() || snapshot.suggestedBaseBranch || "main",
+      headBranch: snapshot.branch,
+      title: title.value.trim(),
+      body: body.value,
+    });
+  });
+  parent.append(form);
+}
+
+function renderRepositoryMergeForm(parent: HTMLElement, snapshot: RepositorySnapshot, review: RepositoryReview): void {
+  const form = makeElement("form", "repository-action-form");
+  form.append(makeElement("strong", "repository-form-title", `Merge PR #${review.number}`));
+  appendDetailLine(form, "Exact target", `PR #${review.number} · ${review.headBranch} → ${review.baseBranch}`);
+  const method = makeElement("select", "repository-form-input") as HTMLSelectElement;
+  for (const value of ["squash", "merge", "rebase"]) {
+    const option = makeElement("option", undefined, value) as HTMLOptionElement;
+    option.value = value;
+    method.append(option);
+  }
+  const methodLabel = makeElement("label", "repository-form-field");
+  methodLabel.append(makeElement("span", undefined, "Merge method"), method);
+  form.append(methodLabel);
+  const submit = makeElement("button", "detail-action", "Merge only after confirmation") as HTMLButtonElement;
+  submit.type = "submit";
+  submit.disabled = !snapshot.github.available || !snapshot.github.authenticated || review.state !== "OPEN";
+  form.append(submit);
+  form.addEventListener("submit", (event) => {
+    event.preventDefault();
+    if (!repositoryConfirmation(`Merge PR #${review.number}: ${review.title}\n\n${review.headBranch} → ${review.baseBranch}\nMethod: ${method.value}`)) {
+      return;
+    }
+    void executeRepositoryAction("repository_merge_pr", {
+      path: snapshot.repositoryRoot ?? repositoryPath(),
+      pullRequestNumber: review.number,
+      method: method.value,
+    });
+  });
+  parent.append(form);
+}
+
+function renderRepositoryCleanupSection(parent: HTMLElement, snapshot: RepositorySnapshot): void {
+  if (snapshot.cleanupCandidates.length === 0) {
+    parent.append(makeElement("p", "detail-empty", "No secondary Worktrees are registered for cleanup."));
+    return;
+  }
+  for (const candidate of snapshot.cleanupCandidates) {
+    const item = makeElement("div", "repository-item");
+    item.append(makeElement("strong", undefined, candidate.branch ?? candidate.target));
+    appendDetailLine(item, "Target", candidate.target);
+    appendDetailLine(item, "Changes", candidate.dirty ? "present or unverified" : "none detected");
+    item.append(makeElement("p", "detail-note", candidate.reason));
+    if (candidate.allowed) {
+      item.append(
+        repositoryActionButton("Review and remove empty Worktree", () => {
+          if (!repositoryConfirmation(`Remove this empty Worktree?\n\n${candidate.target}`)) {
+            return;
+          }
+          void executeRepositoryAction("repository_cleanup_worktree", {
+            path: snapshot.repositoryRoot ?? repositoryPath(),
+            target: candidate.target,
+          });
+        }),
+      );
+    }
+    parent.append(item);
+  }
+}
+
+function renderRepositoryView(): void {
+  const snapshot = repositorySnapshot;
+  repositorySections.replaceChildren();
+  if (!snapshot) {
+    repositoryCount.textContent = "waiting";
+    repositoryDetail.replaceChildren(makeElement("p", "detail-empty", "Reading repository status…"));
+    return;
+  }
+  repositoryTitle.textContent = snapshot.repositoryRoot ?? "Repository status";
+  repositoryCount.textContent = snapshot.status === "ready" ? repositoryStatusLabel(snapshot) : "unknown";
+  repositoryNotice.textContent = repositoryNoticeOverride || (
+    snapshot.status === "ready"
+      ? `${snapshot.statusDetail} ${snapshot.github.message}`
+      : snapshot.statusDetail
+  );
+  for (const section of repositorySectionMeta) {
+    const selected = section.id === selectedRepositorySection;
+    const row = makeElement("button", "store-row") as HTMLButtonElement;
+    row.type = "button";
+    row.dataset.repositorySection = section.id;
+    row.setAttribute("role", "option");
+    row.setAttribute("aria-selected", String(selected));
+    row.classList.toggle("is-selected", selected);
+    row.append(
+      makeElement("span", "store-row-top", section.label),
+      makeElement("span", "store-row-summary", section.id === "summary" ? repositoryStatusLabel(snapshot) : "Inspect exact repository evidence"),
+      makeElement("span", "store-row-state status-unknown", repositorySectionCount(snapshot, section.id)),
+    );
+    row.addEventListener("click", () => selectRepositorySection(section.id));
+    repositorySections.append(row);
+  }
+  renderRepositoryDetail(snapshot);
+}
+
+function renderRepositoryDetail(snapshot: RepositorySnapshot): void {
+  repositoryDetail.replaceChildren();
+  const header = makeElement("header", "detail-header");
+  header.append(
+    makeElement("span", "detail-category", "repository"),
+    makeElement("h2", "detail-title", snapshot.repositoryName ?? "No repository"),
+    makeElement("p", "detail-summary", repositoryStatusLabel(snapshot)),
+    makeElement("p", "detail-meta", snapshot.repositoryRoot ?? snapshot.statusDetail),
+  );
+  repositoryDetail.append(header);
+  if (snapshot.status === "unknown") {
+    repositoryDetail.append(
+      makeElement("p", "detail-note", "The terminal remains available. Focus a Git repository to use Repository View actions."),
+    );
+    return;
+  }
+
+  const section = appendDetailSection(
+    repositoryDetail,
+    repositorySectionMeta.find((candidate) => candidate.id === selectedRepositorySection)?.label ?? "Status",
+  );
+  switch (selectedRepositorySection) {
+    case "summary":
+      appendDetailLine(section, "Branch", snapshot.branch ?? "detached HEAD");
+      appendDetailLine(section, "Working tree", snapshot.dirty ? "dirty" : "clean");
+      appendDetailLine(section, "Ahead / behind", `${snapshot.ahead ?? "?"} / ${snapshot.behind ?? "?"}`);
+      appendDetailLine(section, "Upstream", snapshot.upstream ?? "not configured");
+      appendDetailLine(section, "GitHub", snapshot.github.message);
+      if (snapshot.attention.length > 0) {
+        const attention = appendDetailSection(repositoryDetail, "Items needing attention");
+        appendDetailList(attention, snapshot.attention, "No attention items");
+      }
+      renderRepositorySummaryActions(repositoryDetail, snapshot);
+      break;
+    case "changedFiles":
+      appendDetailList(
+        section,
+        snapshot.changedFiles.map((file) => `${file.status} · ${file.path}${file.untracked ? " · untracked" : file.staged ? " · staged" : ""}`),
+        "Working tree is clean.",
+      );
+      if (snapshot.changedFiles.length > 0) {
+        renderRepositoryCommitForm(repositoryDetail, snapshot);
+      }
+      break;
+    case "commits":
+      if (snapshot.commits.length === 0) {
+        section.append(makeElement("p", "detail-empty", "No commits were returned by Git."));
+      } else {
+        const list = makeElement("div", "repository-item-list");
+        for (const commit of snapshot.commits) {
+          const item = makeElement("div", "repository-item");
+          item.append(makeElement("strong", undefined, `${commit.shortHash} · ${commit.subject}`));
+          appendDetailLine(item, "Author", `${commit.author} · ${commit.authoredAt}`);
+          list.append(item);
+        }
+        section.append(list);
+      }
+      break;
+    case "branches":
+      if (snapshot.branches.length === 0) {
+        section.append(makeElement("p", "detail-empty", "No local branches were returned by Git."));
+      } else {
+        for (const branch of snapshot.branches) {
+          const item = makeElement("div", "repository-item");
+          item.append(makeElement("strong", undefined, `${branch.current ? "● " : ""}${branch.name}`));
+          appendDetailLine(item, "Upstream", branch.upstream ?? "not configured");
+          appendDetailLine(item, "Ahead / behind", `${branch.ahead ?? "?"} / ${branch.behind ?? "?"}`);
+          section.append(item);
+        }
+      }
+      break;
+    case "worktrees":
+      if (snapshot.worktrees.length === 0) {
+        section.append(makeElement("p", "detail-empty", "Git returned no Worktrees."));
+      } else {
+        for (const worktree of snapshot.worktrees) {
+          const item = makeElement("div", "repository-item");
+          item.append(makeElement("strong", undefined, worktree.branch ?? (worktree.bare ? "bare repository" : "detached HEAD")));
+          appendDetailLine(item, "Path", worktree.path);
+          appendDetailLine(item, "Changes", worktree.dirty ? "present or unverified" : "none detected");
+          item.append(makeElement("p", "detail-note", worktree.cleanupReason));
+          section.append(item);
+        }
+      }
+      break;
+    case "reviews":
+      if (snapshot.reviews.length === 0) {
+        section.append(makeElement("p", "detail-empty", snapshot.github.authenticated ? "No pull requests were found for the focused branch." : snapshot.github.message));
+      } else {
+        for (const review of snapshot.reviews) {
+          const item = makeElement("div", "repository-item");
+          const link = makeElement("a", "repository-review-link", `PR #${review.number} · ${review.title}`) as HTMLAnchorElement;
+          link.href = review.url;
+          link.target = "_blank";
+          link.rel = "noreferrer";
+          item.append(link);
+          appendDetailLine(item, "State", `${review.state}${review.isDraft ? " · draft" : ""}`);
+          appendDetailLine(item, "Review", review.reviewDecision ?? "not reported");
+          appendDetailLine(item, "Target", `${review.headBranch} → ${review.baseBranch}`);
+          renderRepositoryMergeForm(item, snapshot, review);
+          section.append(item);
+        }
+      }
+      if (snapshot.branch) {
+        renderRepositoryDraftPrForm(repositoryDetail, snapshot);
+      }
+      break;
+    case "conflicts":
+      appendDetailList(section, snapshot.conflicts, "No unmerged conflict paths reported by Git.");
+      break;
+    case "cleanup":
+      renderRepositoryCleanupSection(section, snapshot);
+      break;
+  }
+}
+
+function renderRepositorySummaryActions(parent: HTMLElement, snapshot: RepositorySnapshot): void {
+  const actions = appendDetailSection(parent, "Explicit actions");
+  actions.append(makeElement("p", "detail-note", "Each action shows its exact target and waits for a second confirmation."));
+  if (snapshot.dirty) {
+    renderRepositoryCommitForm(actions, snapshot);
+  } else {
+    actions.append(makeElement("p", "detail-empty", "Commit is unavailable because the working tree is clean."));
+  }
+  if (snapshot.branch && snapshot.remotes.length > 0) {
+    renderRepositoryPushForm(actions, snapshot);
+  } else {
+    actions.append(makeElement("p", "detail-empty", "Push needs a current branch and a configured remote."));
+  }
+  if (snapshot.branch && snapshot.github.available && snapshot.github.authenticated) {
+    renderRepositoryDraftPrForm(actions, snapshot);
+  } else {
+    actions.append(makeElement("p", "detail-empty", snapshot.github.message));
+  }
+}
+
+function selectRepositorySection(section: RepositorySection, focusRow = false): void {
+  selectedRepositorySection = section;
+  renderRepositoryView();
+  if (focusRow) {
+    window.requestAnimationFrame(() => repositorySections.querySelector<HTMLButtonElement>(`[data-repository-section="${section}"]`)?.focus());
+  }
+}
+
+function moveRepositorySelection(offset: number): void {
+  const currentIndex = repositorySectionMeta.findIndex((section) => section.id === selectedRepositorySection);
+  const next = repositorySectionMeta[(Math.max(currentIndex, 0) + offset + repositorySectionMeta.length) % repositorySectionMeta.length];
+  selectRepositorySection(next.id, true);
+}
+
+function renderRepositoryQuickMenu(): void {
+  repositoryQuickContent.replaceChildren();
+  const snapshot = repositorySnapshot;
+  if (!snapshot) {
+    repositoryQuickContent.append(makeElement("p", "detail-empty", "Reading repository status…"));
+    return;
+  }
+  const facts = makeElement("div", "repository-quick-facts");
+  appendDetailLine(facts, "Repository", snapshot.repositoryRoot ?? "unknown");
+  appendDetailLine(facts, "Status", repositoryStatusLabel(snapshot));
+  appendDetailLine(facts, "Attention", snapshot.attention.length > 0 ? `${snapshot.attention.length} item(s)` : "none");
+  repositoryQuickContent.append(facts);
+  if (snapshot.attention.length > 0) {
+    appendDetailList(repositoryQuickContent, snapshot.attention, "No attention items");
+  }
+  const actions = makeElement("div", "repository-quick-actions");
+  actions.append(
+    repositoryActionButton("Open status", () => openRepositoryView("summary")),
+    repositoryActionButton("Commit changes", () => openRepositoryView("changedFiles"), !snapshot.dirty),
+    repositoryActionButton("Push branch", () => openRepositoryView("summary"), !snapshot.branch || snapshot.remotes.length === 0),
+    repositoryActionButton("Create draft PR", () => openRepositoryView("reviews"), !snapshot.branch || !snapshot.github.authenticated),
+    repositoryActionButton("Full Repository View", () => openRepositoryView("summary")),
+  );
+  repositoryQuickContent.append(actions);
+  repositoryQuickContent.append(makeElement("p", "detail-note", "GitHub absence or failed authentication only disables GitHub actions. Local Git remains available."));
+}
+
+function closeRepositoryQuickMenu(): void {
+  repositoryQuickOpen = false;
+  repositoryQuick.hidden = true;
+  repositoryOpenButton.setAttribute("aria-expanded", "false");
+}
+
+function openRepositoryQuickMenu(): void {
+  if (storeOpen) {
+    closeSurface();
+  }
+  repositoryQuickOpen = true;
+  repositoryQuick.hidden = false;
+  repositoryOpenButton.setAttribute("aria-expanded", "true");
+  renderRepositoryQuickMenu();
+  void refreshRepository();
+}
+
+function openRepositoryView(section: RepositorySection = "summary"): void {
+  closeRepositoryQuickMenu();
+  selectedRepositorySection = section;
+  storeOpen = true;
+  activeSurface = "repository";
+  terminalShell.hidden = true;
+  launchpadView.hidden = true;
+  storeView.hidden = true;
+  appsView.hidden = true;
+  agentsView.hidden = true;
+  tasksView.hidden = true;
+  repositoryView.hidden = false;
+  attentionView.hidden = true;
+  launchpadOpenButton.setAttribute("aria-expanded", "false");
+  storeOpenButton.setAttribute("aria-expanded", "false");
+  appsOpenButton.setAttribute("aria-expanded", "false");
+  agentsOpenButton.setAttribute("aria-expanded", "false");
+  tasksOpenButton.setAttribute("aria-expanded", "false");
+  repositoryOpenButton.setAttribute("aria-expanded", "true");
+  attentionOpenButton.setAttribute("aria-expanded", "false");
+  sessionMeta.textContent = "repository view";
+  status.textContent = "repository";
+  status.dataset.state = "ready";
+  void refreshRepository();
+}
+
 function openAttentionQueue(): void {
+  closeRepositoryQuickMenu();
+  repositoryView.hidden = true;
+  repositoryOpenButton.setAttribute("aria-expanded", "false");
   if (storeOpen && activeSurface === "attention") {
     attentionSearch.focus();
     return;
@@ -4315,6 +5159,7 @@ function openAttentionQueue(): void {
   appsView.hidden = true;
   agentsView.hidden = true;
   tasksView.hidden = true;
+  repositoryView.hidden = true;
   attentionView.hidden = false;
   launchpadOpenButton.setAttribute("aria-expanded", "false");
   storeOpenButton.setAttribute("aria-expanded", "false");
@@ -5387,6 +6232,9 @@ function scheduleLaunchpadRefresh(): void {
 }
 
 function openLaunchpad(): void {
+  closeRepositoryQuickMenu();
+  repositoryView.hidden = true;
+  repositoryOpenButton.setAttribute("aria-expanded", "false");
   if (storeOpen && activeSurface === "launchpad") {
     launchpadSearch.focus();
     return;
@@ -5399,6 +6247,7 @@ function openLaunchpad(): void {
   appsView.hidden = true;
   agentsView.hidden = true;
   tasksView.hidden = true;
+  repositoryView.hidden = true;
   attentionView.hidden = true;
   launchpadOpenButton.setAttribute("aria-expanded", "true");
   storeOpenButton.setAttribute("aria-expanded", "false");
@@ -6106,6 +6955,9 @@ function scheduleStoreRefresh(): void {
 }
 
 function openStore(category?: CatalogCategory | "", focusId?: string): void {
+  closeRepositoryQuickMenu();
+  repositoryView.hidden = true;
+  repositoryOpenButton.setAttribute("aria-expanded", "false");
   if (category !== undefined) {
     storeCategory.value = category;
   }
@@ -6130,6 +6982,7 @@ function openStore(category?: CatalogCategory | "", focusId?: string): void {
   storeView.hidden = false;
   agentsView.hidden = true;
   tasksView.hidden = true;
+  repositoryView.hidden = true;
   attentionView.hidden = true;
   launchpadOpenButton.setAttribute("aria-expanded", "false");
   storeOpenButton.setAttribute("aria-expanded", "true");
@@ -6145,6 +6998,9 @@ function openStore(category?: CatalogCategory | "", focusId?: string): void {
 }
 
 function openMyApps(): void {
+  closeRepositoryQuickMenu();
+  repositoryView.hidden = true;
+  repositoryOpenButton.setAttribute("aria-expanded", "false");
   if (storeOpen && activeSurface === "apps") {
     appsSearch.focus();
     return;
@@ -6158,6 +7014,7 @@ function openMyApps(): void {
   appsView.hidden = false;
   agentsView.hidden = true;
   tasksView.hidden = true;
+  repositoryView.hidden = true;
   attentionView.hidden = true;
   launchpadOpenButton.setAttribute("aria-expanded", "false");
   storeOpenButton.setAttribute("aria-expanded", "false");
@@ -6173,6 +7030,7 @@ function openMyApps(): void {
 }
 
 function closeSurface(): void {
+  closeRepositoryQuickMenu();
   if (!storeOpen) {
     if (!terminalStarted && !terminalStartPromise) {
       void startSession();
@@ -6187,6 +7045,7 @@ function closeSurface(): void {
   appsView.hidden = true;
   agentsView.hidden = true;
   tasksView.hidden = true;
+  repositoryView.hidden = true;
   attentionView.hidden = true;
   terminalShell.hidden = false;
   launchpadOpenButton.setAttribute("aria-expanded", "false");
@@ -6194,6 +7053,7 @@ function closeSurface(): void {
   appsOpenButton.setAttribute("aria-expanded", "false");
   agentsOpenButton.setAttribute("aria-expanded", "false");
   tasksOpenButton.setAttribute("aria-expanded", "false");
+  repositoryOpenButton.setAttribute("aria-expanded", "false");
   attentionOpenButton.setAttribute("aria-expanded", "false");
   updateFocusedSession();
   renderTerminalStatus();
@@ -6208,6 +7068,10 @@ function closeStore(): void {
   closeSurface();
 }
 
+repositoryOpenButton.addEventListener("click", openRepositoryQuickMenu);
+repositoryRefreshButton.addEventListener("click", () => void refreshRepository());
+repositoryCloseButton.addEventListener("click", closeSurface);
+repositoryQuickCloseButton.addEventListener("click", closeRepositoryQuickMenu);
 launchpadOpenButton.addEventListener("click", openLaunchpad);
 storeOpenButton.addEventListener("click", () => openStore());
 appsOpenButton.addEventListener("click", openMyApps);
@@ -6284,6 +7148,28 @@ storeList.addEventListener("keydown", (event) => {
 appsSearch.addEventListener("input", scheduleMyAppsRefresh);
 agentSearch.addEventListener("input", scheduleAgentRefresh);
 tasksSearch.addEventListener("input", renderAgentTaskCenter);
+repositorySections.addEventListener("keydown", (event) => {
+  if (event.key === "ArrowDown") {
+    event.preventDefault();
+    moveRepositorySelection(1);
+  } else if (event.key === "ArrowUp") {
+    event.preventDefault();
+    moveRepositorySelection(-1);
+  } else if (event.key === "Home") {
+    event.preventDefault();
+    selectRepositorySection("summary", true);
+  } else if (event.key === "End") {
+    event.preventDefault();
+    selectRepositorySection("cleanup", true);
+  } else if (event.key === "Enter") {
+    event.preventDefault();
+    const activeRow = event.target instanceof HTMLButtonElement ? event.target : undefined;
+    const section = activeRow?.dataset.repositorySection as RepositorySection | undefined;
+    if (section) {
+      selectRepositorySection(section, true);
+    }
+  }
+});
 attentionSearch.addEventListener("input", renderAttentionQueue);
 launchpadList.addEventListener("keydown", (event) => {
   if (event.key === "ArrowDown") {
@@ -6483,6 +7369,14 @@ window.addEventListener("keydown", (event) => {
     if (event.key === "Escape" && event.target !== commandSearch) {
       event.preventDefault();
       closeCommandOverlay();
+    }
+    return;
+  }
+
+  if (repositoryQuickOpen) {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      closeRepositoryQuickMenu();
     }
     return;
   }

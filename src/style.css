@@ -1581,6 +1581,166 @@ select {
   overflow-wrap: anywhere;
 }
 
+.repository-indicator {
+  max-width: 255px;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.repository-indicator-value {
+  min-width: 0;
+  overflow: hidden;
+  color: #9ed67a;
+  text-overflow: ellipsis;
+}
+
+.repository-view .store-content {
+  grid-template-columns: minmax(180px, 0.55fr) minmax(420px, 1.8fr);
+}
+
+.repository-sections .store-row-summary {
+  overflow-wrap: anywhere;
+}
+
+.repository-detail {
+  overflow-wrap: anywhere;
+}
+
+.repository-item-list {
+  display: grid;
+  gap: 7px;
+}
+
+.repository-item {
+  display: grid;
+  gap: 5px;
+  margin-top: 8px;
+  padding: 9px;
+  border: 1px solid #29343d;
+  background: #0c1014;
+}
+
+.repository-item:first-child {
+  margin-top: 0;
+}
+
+.repository-item strong,
+.repository-form-title {
+  color: #e8ecef;
+  font-size: 11px;
+}
+
+.repository-review-link {
+  color: #83b8ff;
+  font-size: 11px;
+  text-decoration: none;
+}
+
+.repository-review-link:hover,
+.repository-review-link:focus-visible {
+  color: #ffffff;
+  text-decoration: underline;
+  outline: none;
+}
+
+.repository-action-form {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+  padding: 10px;
+  border: 1px solid #303b45;
+  border-left: 2px solid #ff9c4a;
+  background: #10161b;
+}
+
+.repository-form-field {
+  display: grid;
+  gap: 4px;
+  color: #7e8a95;
+  font-size: 10px;
+  text-transform: uppercase;
+}
+
+.repository-form-input {
+  min-width: 0;
+  padding: 7px;
+  border: 1px solid #303b45;
+  border-radius: 2px;
+  outline: none;
+  background: #090b0e;
+  color: #e8ecef;
+  font: inherit;
+  font-size: 11px;
+}
+
+.repository-form-input:focus {
+  border-color: #ff9c4a;
+  box-shadow: 0 0 0 1px rgba(255, 156, 74, 0.15);
+}
+
+.repository-form-check {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: #a9b3ba;
+  font-size: 10px;
+}
+
+.repository-form-check input {
+  accent-color: #ff9c4a;
+}
+
+.repository-action-log {
+  max-height: 150px;
+  margin: 10px 0 0;
+  padding: 8px;
+  overflow: auto;
+  border-left: 2px solid #68737d;
+  background: #0c1014;
+  color: #a9b3ba;
+  font: inherit;
+  font-size: 10px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+}
+
+.repository-quick-menu {
+  position: absolute;
+  z-index: 24;
+  top: 9px;
+  right: 14px;
+  width: min(470px, calc(100% - 28px));
+  max-height: calc(100% - 18px);
+  overflow: auto;
+  background: rgba(4, 6, 8, 0.82);
+}
+
+.repository-quick-card {
+  display: grid;
+  gap: 10px;
+  padding: 13px;
+  border: 1px solid #3b4752;
+  border-radius: 3px;
+  background: #0c1014;
+  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.52);
+}
+
+.repository-quick-facts {
+  display: grid;
+  gap: 2px;
+}
+
+.repository-quick-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 7px;
+}
+
+.repository-quick-actions .detail-action {
+  width: 100%;
+  margin-top: 0;
+}
+
 .store-row-state.status-warning {
   color: #ffcf70;
 }
