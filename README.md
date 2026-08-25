@@ -15,3 +15,4 @@ In planning. Tracked on the [wayfinder map](https://github.com/prathyaksh24-wq/a
 - `research/terminal-foundations.md` — ConPTY / xterm.js / Tauri stack decisions
 - `research/agent-capabilities.md` — agent CLI + integration tool capability table
 - `research/catalog-shortlist.md` — ranked integration candidates from the awesome-tui catalogs
+- `docs/release/windows-first-release.md` — Windows installer, migration, update, and release-test rules

@@ -5,6 +5,7 @@ mod installer;
 mod integration;
 mod launcher;
 mod pty;
+mod release;
 mod repository;
 mod settings;
 mod task;
@@ -36,6 +37,12 @@ fn main() {
         .manage(SettingsRuntime::default())
         .manage(AgentTaskRuntime::default())
         .manage(WorkspaceRuntime::default())
+        .setup(|app| {
+            if let Err(error) = release::prepare(app.handle()) {
+                eprintln!("Arkonad release data preparation did not complete: {error}");
+            }
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             agent::agent_supervision_snapshot,
             agent::agent_supervision_register,
@@ -103,6 +110,8 @@ fn main() {
             settings::settings_validate,
             settings::settings_import,
             settings::settings_export,
+            release::release_status,
+            release::release_restore_last_backup,
             task::agent_task_list,
             task::agent_task_plan,
             task::agent_task_create,
