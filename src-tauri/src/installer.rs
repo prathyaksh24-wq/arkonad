@@ -15,6 +15,7 @@ use std::{
 use tauri::{AppHandle, Manager};
 
 const RECEIPT_FILE_NAME: &str = "install-receipts.json";
+const RECEIPT_SCHEMA_VERSION: u32 = 1;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -111,6 +112,15 @@ impl ReceiptOwnership {
             Self::Adopted => "adopted",
         }
     }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ReceiptStoreFile {
+    #[serde(default)]
+    schema_version: u32,
+    #[serde(default)]
+    receipts: Vec<InstallReceipt>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1879,8 +1889,7 @@ fn receipt_path(app: &AppHandle) -> Result<PathBuf, String> {
 fn read_receipts(app: &AppHandle) -> Result<Vec<InstallReceipt>, String> {
     let path = receipt_path(app)?;
     match fs::read_to_string(&path) {
-        Ok(contents) => serde_json::from_str(&contents)
-            .map_err(|error| format!("invalid installation receipt file: {error}")),
+        Ok(contents) => parse_receipt_store(&contents),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
         Err(error) => Err(format!("could not read installation receipts: {error}")),
     }
@@ -1892,10 +1901,31 @@ fn write_receipts(app: &AppHandle, receipts: &[InstallReceipt]) -> Result<(), St
         fs::create_dir_all(directory)
             .map_err(|error| format!("could not create Arkonad app data directory: {error}"))?;
     }
-    let contents = serde_json::to_vec_pretty(receipts)
-        .map_err(|error| format!("could not encode installation receipt: {error}"))?;
+    let contents = serde_json::to_vec_pretty(&ReceiptStoreFile {
+        schema_version: RECEIPT_SCHEMA_VERSION,
+        receipts: receipts.to_vec(),
+    })
+    .map_err(|error| format!("could not encode installation receipt: {error}"))?;
     fs::write(&path, contents)
         .map_err(|error| format!("could not write installation receipt: {error}"))
+}
+
+fn parse_receipt_store(contents: &str) -> Result<Vec<InstallReceipt>, String> {
+    let value: serde_json::Value = serde_json::from_str(contents)
+        .map_err(|error| format!("invalid installation receipt file: {error}"))?;
+    if value.is_array() {
+        return serde_json::from_value(value)
+            .map_err(|error| format!("invalid installation receipt file: {error}"));
+    }
+    let store: ReceiptStoreFile = serde_json::from_value(value)
+        .map_err(|error| format!("invalid installation receipt file: {error}"))?;
+    if store.schema_version != RECEIPT_SCHEMA_VERSION {
+        return Err(format!(
+            "installation receipt schema version {} is not supported",
+            store.schema_version
+        ));
+    }
+    Ok(store.receipts)
 }
 
 #[cfg(test)]

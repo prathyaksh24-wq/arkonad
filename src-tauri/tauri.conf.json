@@ -26,7 +26,23 @@
     }
   },
   "bundle": {
-    "active": false,
+    "active": true,
+    "targets": ["nsis", "msi"],
+    "windows": {
+      "allowDowngrades": false,
+      "nsis": {
+        "installMode": "currentUser",
+        "displayLanguageSelector": false
+      },
+      "webviewInstallMode": {
+        "type": "downloadBootstrapper",
+        "silent": true
+      },
+      "wix": {
+        "language": "en-US",
+        "upgradeCode": "6b0be7f0-6b83-5f22-9e80-0d067fc2e6d9"
+      }
+    },
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

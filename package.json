@@ -3,10 +3,12 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
+  "packageManager": "pnpm@9.15.9",
   "scripts": {
     "dev": "vite --host 127.0.0.1",
     "build": "tsc --noEmit && vite build",
     "test:accessibility": "node scripts/verify-settings-accessibility.mjs",
+    "test:release": "node scripts/verify-release-contract.mjs",
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
     "tauri:build": "tauri build"
