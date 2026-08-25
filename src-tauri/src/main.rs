@@ -6,6 +6,7 @@ mod integration;
 mod launcher;
 mod pty;
 mod repository;
+mod settings;
 mod task;
 mod workspace;
 
@@ -17,6 +18,7 @@ use integration::IntegrationRuntime;
 use launcher::LaunchRuntime;
 use pty::SessionManager;
 use repository::RepositoryRuntime;
+use settings::SettingsRuntime;
 use task::AgentTaskRuntime;
 use workspace::WorkspaceRuntime;
 
@@ -31,6 +33,7 @@ fn main() {
         .manage(IntegrationRuntime::default())
         .manage(SessionManager::default())
         .manage(RepositoryRuntime::default())
+        .manage(SettingsRuntime::default())
         .manage(AgentTaskRuntime::default())
         .manage(WorkspaceRuntime::default())
         .invoke_handler(tauri::generate_handler![
@@ -95,6 +98,11 @@ fn main() {
             repository::repository_create_draft_pr,
             repository::repository_merge_pr,
             repository::repository_cleanup_worktree,
+            settings::settings_load,
+            settings::settings_save,
+            settings::settings_validate,
+            settings::settings_import,
+            settings::settings_export,
             task::agent_task_list,
             task::agent_task_plan,
             task::agent_task_create,
