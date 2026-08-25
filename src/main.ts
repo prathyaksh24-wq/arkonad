@@ -53,8 +53,9 @@ type FrameSnapshot = {
 };
 
 type WorkspaceSettings = {
-  leaderChord: string;
+  leaderChord?: string;
   agentPolicies?: Record<string, AgentPolicy>;
+  overrides?: WorkspaceSettingsOverrides;
 };
 
 type WorkspaceDocument = {
@@ -854,6 +855,59 @@ type ManagementPlan = {
 };
 
 type StartupBehavior = "terminal" | "store" | "apps" | "launchpad" | "lastWorkspace";
+type ThemeId = "ember" | "midnight" | "carbon";
+type MotionPreference = "system" | "reduced" | "full";
+type TransparencyPreference = "solid" | "subtle" | "glass";
+type AppUpdatePolicy = "review" | "notify" | "never";
+
+type ShellProfile = {
+  id: string;
+  label: string;
+  executable: string | null;
+};
+
+type SettingsDocument = {
+  schemaVersion: number;
+  leaderChord: string;
+  startupSurface: StartupBehavior;
+  defaultShellProfileId: string;
+  shellProfiles: ShellProfile[];
+  theme: ThemeId;
+  motion: MotionPreference;
+  transparency: TransparencyPreference;
+  fontScale: number;
+  highContrast: boolean;
+  screenReaderLabels: boolean;
+  appUpdatePolicy: AppUpdatePolicy;
+};
+
+type WorkspaceSettingsOverrides = {
+  leaderChord?: string;
+  shellProfileId?: string;
+  theme?: ThemeId;
+  motion?: MotionPreference;
+  transparency?: TransparencyPreference;
+  fontScale?: number;
+  highContrast?: boolean;
+  screenReaderLabels?: boolean;
+  appUpdatePolicy?: AppUpdatePolicy;
+};
+
+type SettingsLoadResult = {
+  status: "ready" | "default" | "invalid";
+  message: string;
+  settings: SettingsDocument;
+};
+
+type SettingsValidationResult = {
+  valid: boolean;
+  message: string;
+  settings: SettingsDocument | null;
+};
+
+type SettingsSection = "general" | "appearance" | "accessibility" | "shells" | "advanced";
+type SettingsScope = "global" | "workspace";
+
 type OnboardingChoiceId = "terminal" | "store" | "apps" | "agent" | "restore";
 
 type OnboardingChoice = {
@@ -945,6 +999,163 @@ function startupBehaviorLabel(value: StartupBehavior): string {
   return startupBehaviorOptions.find((option) => option.value === value)?.label ?? "Terminal";
 }
 
+const defaultShellProfiles: ShellProfile[] = [
+  { id: "auto", label: "System default", executable: null },
+  { id: "powershell-7", label: "PowerShell 7", executable: "pwsh.exe" },
+  { id: "windows-powershell", label: "Windows PowerShell", executable: "powershell.exe" },
+  { id: "command-prompt", label: "Command Prompt", executable: "cmd.exe" },
+  { id: "wsl", label: "WSL", executable: "wsl.exe" },
+];
+
+const themeOptions: Array<{ value: ThemeId; label: string; description: string }> = [
+  { value: "ember", label: "Ember", description: "Near-black surfaces with a warm ember focus accent." },
+  { value: "midnight", label: "Midnight", description: "Near-black surfaces with a cooler blue focus accent." },
+  { value: "carbon", label: "Carbon", description: "Neutral graphite surfaces with a quiet green focus accent." },
+];
+
+const motionOptions: Array<{ value: MotionPreference; label: string }> = [
+  { value: "system", label: "Follow system preference" },
+  { value: "reduced", label: "Reduce motion" },
+  { value: "full", label: "Allow motion" },
+];
+
+const transparencyOptions: Array<{ value: TransparencyPreference; label: string }> = [
+  { value: "solid", label: "Solid surfaces" },
+  { value: "subtle", label: "Subtle transparency" },
+  { value: "glass", label: "More transparency" },
+];
+
+const updatePolicyOptions: Array<{ value: AppUpdatePolicy; label: string; description: string }> = [
+  { value: "review", label: "Review before update", description: "Show updates and require an explicit review before a command runs." },
+  { value: "notify", label: "Notify only", description: "Show that an update exists without starting an update flow." },
+  { value: "never", label: "Do not check automatically", description: "Only check for updates when you open My Apps." },
+];
+
+const settingsSectionMeta: Array<{ id: SettingsSection; label: string; summary: string }> = [
+  { id: "general", label: "General", summary: "Leader, startup, and update policy" },
+  { id: "appearance", label: "Appearance", summary: "Theme, motion, and transparency" },
+  { id: "accessibility", label: "Accessibility", summary: "Contrast, text scale, and labels" },
+  { id: "shells", label: "Shell profiles", summary: "Choose and edit launchable shells" },
+  { id: "advanced", label: "Advanced config", summary: "Inspect, validate, import, or export JSON" },
+];
+
+function defaultSettings(): SettingsDocument {
+  return {
+    schemaVersion: 1,
+    leaderChord: "ctrl+space",
+    startupSurface: "terminal",
+    defaultShellProfileId: "auto",
+    shellProfiles: defaultShellProfiles.map((profile) => ({ ...profile })),
+    theme: "ember",
+    motion: "system",
+    transparency: "solid",
+    fontScale: 1,
+    highContrast: false,
+    screenReaderLabels: true,
+    appUpdatePolicy: "review",
+  };
+}
+
+function normalizeTheme(value: unknown): ThemeId {
+  return value === "midnight" || value === "carbon" ? value : "ember";
+}
+
+function normalizeMotion(value: unknown): MotionPreference {
+  return value === "reduced" || value === "full" ? value : "system";
+}
+
+function normalizeTransparency(value: unknown): TransparencyPreference {
+  return value === "subtle" || value === "glass" ? value : "solid";
+}
+
+function normalizeUpdatePolicy(value: unknown): AppUpdatePolicy {
+  return value === "notify" || value === "never" ? value : "review";
+}
+
+function normalizeShellProfiles(value: unknown): ShellProfile[] {
+  if (!Array.isArray(value)) {
+    return defaultShellProfiles.map((profile) => ({ ...profile }));
+  }
+  const profiles = value
+    .filter((candidate): candidate is Record<string, unknown> => Boolean(candidate && typeof candidate === "object"))
+    .map((candidate) => ({
+      id: typeof candidate.id === "string" ? candidate.id.trim() : "",
+      label: typeof candidate.label === "string" ? candidate.label.trim() : "",
+      executable: typeof candidate.executable === "string" && candidate.executable.trim()
+        ? candidate.executable.trim()
+        : null,
+    }))
+    .filter((profile) => profile.id.length > 0 && profile.label.length > 0)
+    .filter((profile, index, all) => all.findIndex((candidate) => candidate.id === profile.id) === index);
+  return profiles.length > 0 ? profiles : defaultShellProfiles.map((profile) => ({ ...profile }));
+}
+
+function normalizeSettings(value: unknown): SettingsDocument {
+  const defaults = defaultSettings();
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return defaults;
+  }
+  const candidate = value as Partial<SettingsDocument>;
+  const shellProfiles = normalizeShellProfiles(candidate.shellProfiles);
+  const defaultShellProfileId = typeof candidate.defaultShellProfileId === "string"
+    && shellProfiles.some((profile) => profile.id === candidate.defaultShellProfileId)
+    ? candidate.defaultShellProfileId
+    : shellProfiles[0].id;
+  const fontScale = typeof candidate.fontScale === "number" && Number.isFinite(candidate.fontScale)
+    ? Math.min(1.5, Math.max(0.8, candidate.fontScale))
+    : defaults.fontScale;
+  return {
+    schemaVersion: 1,
+    leaderChord: typeof candidate.leaderChord === "string" && candidate.leaderChord.trim()
+      ? normalizedLeader(candidate.leaderChord)
+      : defaults.leaderChord,
+    startupSurface: startupBehaviorOptions.some((option) => option.value === candidate.startupSurface)
+      ? candidate.startupSurface as StartupBehavior
+      : defaults.startupSurface,
+    defaultShellProfileId,
+    shellProfiles,
+    theme: normalizeTheme(candidate.theme),
+    motion: normalizeMotion(candidate.motion),
+    transparency: normalizeTransparency(candidate.transparency),
+    fontScale,
+    highContrast: candidate.highContrast === true,
+    screenReaderLabels: candidate.screenReaderLabels !== false,
+    appUpdatePolicy: normalizeUpdatePolicy(candidate.appUpdatePolicy),
+  };
+}
+
+function normalizeWorkspaceOverrides(value: unknown): WorkspaceSettingsOverrides {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return {};
+  }
+  const candidate = value as WorkspaceSettingsOverrides;
+  const overrides: WorkspaceSettingsOverrides = {};
+  if (typeof candidate.leaderChord === "string" && candidate.leaderChord.trim()) {
+    overrides.leaderChord = normalizedLeader(candidate.leaderChord);
+  }
+  if (typeof candidate.shellProfileId === "string" && candidate.shellProfileId.trim()) {
+    overrides.shellProfileId = candidate.shellProfileId.trim();
+  }
+  if (candidate.theme === "ember" || candidate.theme === "midnight" || candidate.theme === "carbon") {
+    overrides.theme = candidate.theme;
+  }
+  if (candidate.motion === "system" || candidate.motion === "reduced" || candidate.motion === "full") {
+    overrides.motion = candidate.motion;
+  }
+  if (candidate.transparency === "solid" || candidate.transparency === "subtle" || candidate.transparency === "glass") {
+    overrides.transparency = candidate.transparency;
+  }
+  if (typeof candidate.fontScale === "number" && Number.isFinite(candidate.fontScale)) {
+    overrides.fontScale = Math.min(1.5, Math.max(0.8, candidate.fontScale));
+  }
+  if (typeof candidate.highContrast === "boolean") overrides.highContrast = candidate.highContrast;
+  if (typeof candidate.screenReaderLabels === "boolean") overrides.screenReaderLabels = candidate.screenReaderLabels;
+  if (candidate.appUpdatePolicy === "review" || candidate.appUpdatePolicy === "notify" || candidate.appUpdatePolicy === "never") {
+    overrides.appUpdatePolicy = candidate.appUpdatePolicy;
+  }
+  return overrides;
+}
+
 const defaultAgentPolicy: AgentPolicy = {
   permission: "ask",
   followUp: "queue",
@@ -1015,34 +1226,37 @@ app.innerHTML = `
     <header class="topbar">
       <div class="brand"><span class="ember">◆</span><span>arkonad</span></div>
       <div class="session-meta" data-session-meta>starting terminal session…</div>
-      <button class="topbar-action repository-indicator" type="button" data-repository-open aria-expanded="false">
+      <button class="topbar-action repository-indicator" type="button" data-repository-open aria-label="Repository controls" aria-expanded="false">
         Repo <span class="repository-indicator-value" data-repository-indicator>no repository</span>
         <span class="attention-badge" data-repository-attention hidden aria-live="polite"></span>
       </button>
-      <button class="topbar-action" type="button" data-launchpad-open aria-expanded="false">
+      <button class="topbar-action" type="button" data-launchpad-open aria-label="Launchpad" aria-expanded="false">
         Launchpad <span class="key-hint">palette</span>
       </button>
-      <button class="topbar-action" type="button" data-store-open aria-expanded="false">
+      <button class="topbar-action" type="button" data-store-open aria-label="Terminal App Store" aria-expanded="false">
         Store <span class="key-hint">palette</span>
       </button>
-      <button class="topbar-action" type="button" data-apps-open aria-expanded="false">
+      <button class="topbar-action" type="button" data-apps-open aria-label="My Apps" aria-expanded="false">
         My Apps <span class="apps-update-badge" data-apps-update-badge hidden aria-live="polite"></span>
         <span class="key-hint">palette</span>
       </button>
-      <button class="topbar-action" type="button" data-agents-open aria-expanded="false">
+      <button class="topbar-action" type="button" data-agents-open aria-label="Coding agents" aria-expanded="false">
         Agents <span class="key-hint">palette</span>
       </button>
-      <button class="topbar-action" type="button" data-tasks-open aria-expanded="false">
+      <button class="topbar-action" type="button" data-tasks-open aria-label="Agent Tasks" aria-expanded="false">
         Tasks <span class="key-hint">palette</span>
       </button>
-      <button class="topbar-action" type="button" data-integration-open aria-expanded="false">
+      <button class="topbar-action" type="button" data-integration-open aria-label="Connected Preview" aria-expanded="false">
         Preview <span class="key-hint">palette</span>
       </button>
-      <button class="topbar-action" type="button" data-attention-open aria-expanded="false">
+      <button class="topbar-action" type="button" data-attention-open aria-label="Attention Queue" aria-expanded="false">
         Attention <span class="attention-badge" data-attention-badge hidden aria-live="polite"></span>
         <span class="key-hint">palette</span>
       </button>
-      <div class="status" data-status>connecting</div>
+      <button class="topbar-action" type="button" data-settings-open aria-expanded="false" aria-label="Settings">
+        Settings <span class="key-hint">palette</span>
+      </button>
+      <div class="status" data-status role="status" aria-live="polite">connecting</div>
     </header>
     <main class="workspace">
       <section
@@ -1393,6 +1607,39 @@ app.innerHTML = `
           <span>Esc · terminal</span>
         </div>
       </section>
+      <section class="store-shell settings-view" data-settings-view hidden aria-label="Settings">
+        <div class="store-toolbar">
+          <div class="store-heading">
+            <span class="store-eyebrow">ARKONAD SETTINGS</span>
+            <span class="store-title">Keep the Frame simple; leave hosted tools native</span>
+          </div>
+          <label class="store-control settings-scope-control">
+            <span>Apply to</span>
+            <select data-settings-scope aria-label="Settings scope">
+              <option value="global">All Workspaces</option>
+              <option value="workspace">This Workspace</option>
+            </select>
+          </label>
+          <button class="store-close" type="button" data-settings-close>Esc · terminal</button>
+        </div>
+        <div class="store-notice" data-settings-notice role="status" aria-live="polite">Settings load before a new Session starts.</div>
+        <div class="store-content settings-content">
+          <section class="store-list-panel" aria-label="Settings sections">
+            <div class="store-list-header">
+              <span>Settings</span>
+              <span data-settings-count>5 sections</span>
+            </div>
+            <div class="store-list settings-sections" data-settings-sections role="listbox" aria-label="Settings sections"></div>
+          </section>
+          <article class="store-detail settings-detail" data-settings-detail aria-live="polite"></article>
+        </div>
+        <div class="store-footer">
+          <span>↑↓ choose section</span>
+          <span>Enter inspect</span>
+          <span>Changes save explicitly</span>
+          <span>Esc terminal</span>
+        </div>
+      </section>
       <section class="store-shell repository-view" data-repository-view hidden aria-label="Repository View">
         <div class="store-toolbar">
           <div class="store-heading">
@@ -1478,6 +1725,7 @@ const agentsOpenButton = app.querySelector<HTMLButtonElement>("[data-agents-open
 const tasksOpenButton = app.querySelector<HTMLButtonElement>("[data-tasks-open]")!;
 const integrationOpenButton = app.querySelector<HTMLButtonElement>("[data-integration-open]")!;
 const attentionOpenButton = app.querySelector<HTMLButtonElement>("[data-attention-open]")!;
+const settingsOpenButton = app.querySelector<HTMLButtonElement>("[data-settings-open]")!;
 const attentionBadge = app.querySelector<HTMLSpanElement>("[data-attention-badge]")!;
 const appsUpdateBadge = app.querySelector<HTMLSpanElement>("[data-apps-update-badge]")!;
 const launchpadCloseButton = app.querySelector<HTMLButtonElement>("[data-launchpad-close]")!;
@@ -1549,6 +1797,12 @@ const attentionCount = app.querySelector<HTMLSpanElement>("[data-attention-count
 const attentionList = app.querySelector<HTMLDivElement>("[data-attention-list]")!;
 const attentionError = app.querySelector<HTMLDivElement>("[data-attention-error]")!;
 const attentionDetail = app.querySelector<HTMLElement>("[data-attention-detail]")!;
+const settingsView = app.querySelector<HTMLElement>("[data-settings-view]")!;
+const settingsCloseButton = app.querySelector<HTMLButtonElement>("[data-settings-close]")!;
+const settingsScope = app.querySelector<HTMLSelectElement>("[data-settings-scope]")!;
+const settingsNotice = app.querySelector<HTMLDivElement>("[data-settings-notice]")!;
+const settingsSections = app.querySelector<HTMLDivElement>("[data-settings-sections]")!;
+const settingsDetail = app.querySelector<HTMLElement>("[data-settings-detail]")!;
 const commandOverlay = app.querySelector<HTMLElement>("[data-command-overlay]")!;
 const commandCloseButton = app.querySelector<HTMLButtonElement>("[data-command-close]")!;
 const commandSearch = app.querySelector<HTMLInputElement>("[data-command-search]")!;
@@ -1584,6 +1838,7 @@ if (
   !tasksOpenButton ||
   !integrationOpenButton ||
   !attentionOpenButton ||
+  !settingsOpenButton ||
   !attentionBadge ||
   !appsUpdateBadge ||
   !launchpadCloseButton ||
@@ -1655,6 +1910,12 @@ if (
   !attentionList ||
   !attentionError ||
   !attentionDetail ||
+  !settingsView ||
+  !settingsCloseButton ||
+  !settingsScope ||
+  !settingsNotice ||
+  !settingsSections ||
+  !settingsDetail ||
   !commandOverlay ||
   !commandCloseButton ||
   !commandSearch ||
@@ -1684,7 +1945,7 @@ let resizeTimer: number | undefined;
 let terminalStatusText = "connecting";
 let terminalStatusState = "";
 let storeOpen = false;
-let activeSurface: "launchpad" | "store" | "apps" | "agents" | "tasks" | "integration" | "repository" | "attention" = "launchpad";
+let activeSurface: "launchpad" | "store" | "apps" | "agents" | "tasks" | "integration" | "repository" | "attention" | "settings" = "launchpad";
 let launchpadEntries: LaunchpadEntry[] = [];
 let selectedLaunchpadId: string | undefined;
 let launchpadRequestId = 0;
@@ -1748,6 +2009,14 @@ let selectedCommandId: string | undefined;
 let pendingClose: "pane" | "tab" | undefined;
 let onboardingOpen = false;
 let selectedOnboardingChoice: OnboardingChoiceId = "terminal";
+let globalSettings: SettingsDocument = defaultSettings();
+let workspaceSettingsOverrides: WorkspaceSettingsOverrides = {};
+let settingsLoaded = false;
+let settingsLoading = false;
+let settingsSection: SettingsSection = "general";
+let settingsScopeValue: SettingsScope = "global";
+let settingsConfigText = "";
+let settingsImportInput: HTMLInputElement | undefined;
 let startupBehavior = parseStartupBehavior(readLocalPreference(startupBehaviorStorageKey));
 let terminalStarted = false;
 let terminalStartPromise: Promise<void> | undefined;
@@ -1766,6 +2035,112 @@ let workspaceSaveTimer: number | undefined;
 let workspaceSaveInFlight: Promise<void> | undefined;
 let workspaceAgentPolicies: Record<string, AgentPolicy> = {};
 const sessionAgentOverrides = new Map<string, AgentPolicy>();
+
+function effectiveSettings(): SettingsDocument {
+  const overrides = workspaceSettingsOverrides;
+  const settings = {
+    ...globalSettings,
+    leaderChord: overrides.leaderChord ?? globalSettings.leaderChord,
+    defaultShellProfileId: overrides.shellProfileId ?? globalSettings.defaultShellProfileId,
+    theme: overrides.theme ?? globalSettings.theme,
+    motion: overrides.motion ?? globalSettings.motion,
+    transparency: overrides.transparency ?? globalSettings.transparency,
+    fontScale: overrides.fontScale ?? globalSettings.fontScale,
+    highContrast: overrides.highContrast ?? globalSettings.highContrast,
+    screenReaderLabels: overrides.screenReaderLabels ?? globalSettings.screenReaderLabels,
+    appUpdatePolicy: overrides.appUpdatePolicy ?? globalSettings.appUpdatePolicy,
+  };
+  if (!settings.shellProfiles.some((profile) => profile.id === settings.defaultShellProfileId)) {
+    settings.defaultShellProfileId = globalSettings.defaultShellProfileId;
+  }
+  return settings;
+}
+
+function effectiveShellProfile(): ShellProfile | undefined {
+  const settings = effectiveSettings();
+  return settings.shellProfiles.find((profile) => profile.id === settings.defaultShellProfileId)
+    ?? settings.shellProfiles[0];
+}
+
+function applySettingsToFrame(): void {
+  const settings = effectiveSettings();
+  leaderChord = normalizedLeader(settings.leaderChord);
+  startupBehavior = settings.startupSurface;
+  leaderHint.textContent = `Leader ${leaderLabel()}`;
+  document.documentElement.dataset.theme = settings.theme;
+  document.documentElement.dataset.motion = settings.motion;
+  document.documentElement.dataset.transparency = settings.transparency;
+  document.documentElement.dataset.highContrast = String(settings.highContrast);
+  document.documentElement.dataset.screenReaderLabels = String(settings.screenReaderLabels);
+  document.documentElement.style.setProperty("--arkonad-font-scale", String(settings.fontScale));
+  for (const runtime of paneRuntimes.values()) {
+    runtime.terminal.options.fontSize = Math.round(14 * settings.fontScale);
+    runtime.terminal.options.theme = terminalTheme(settings);
+    const label = settings.screenReaderLabels
+      ? `${runtime.pane.session.shell} terminal session in ${runtime.pane.session.cwd}`
+      : `${runtime.pane.session.shell} terminal`;
+    runtime.host.setAttribute("aria-label", label);
+    runtime.terminalHost.setAttribute("aria-label", label);
+  }
+  scheduleResize();
+}
+
+function terminalTheme(settings: SettingsDocument): Record<string, string> {
+  const palettes: Record<ThemeId, Record<string, string>> = {
+    ember: {
+      background: "#090b0e",
+      foreground: "#e8ecef",
+      cursor: "#ff9c4a",
+      cursorAccent: "#090b0e",
+      selectionBackground: "#36404a",
+      black: "#090b0e",
+      red: "#ff766b",
+      green: "#9ed67a",
+      yellow: "#ffcf70",
+      blue: "#83b8ff",
+      magenta: "#d8a3ff",
+      cyan: "#7bd7d1",
+      white: "#e8ecef",
+      brightBlack: "#68737d",
+      brightWhite: "#ffffff",
+    },
+    midnight: {
+      background: "#080d14",
+      foreground: "#e1e9f3",
+      cursor: "#83b8ff",
+      cursorAccent: "#080d14",
+      selectionBackground: "#263b52",
+      black: "#080d14",
+      red: "#ff8e8e",
+      green: "#9ed6b0",
+      yellow: "#f5d58b",
+      blue: "#83b8ff",
+      magenta: "#d0b7ff",
+      cyan: "#7bd7d1",
+      white: "#e1e9f3",
+      brightBlack: "#718197",
+      brightWhite: "#ffffff",
+    },
+    carbon: {
+      background: "#0b0d0c",
+      foreground: "#e5ebe5",
+      cursor: "#9ed67a",
+      cursorAccent: "#0b0d0c",
+      selectionBackground: "#334439",
+      black: "#0b0d0c",
+      red: "#ff8b7f",
+      green: "#9ed67a",
+      yellow: "#d8d58b",
+      blue: "#9eb8d6",
+      magenta: "#d2b7d6",
+      cyan: "#9bd1c3",
+      white: "#e5ebe5",
+      brightBlack: "#748078",
+      brightWhite: "#ffffff",
+    },
+  };
+  return palettes[settings.theme];
+}
 
 function renderTerminalStatus(): void {
   status.textContent = terminalStatusText;
@@ -1872,6 +2247,7 @@ function setTopbarActionsDisabled(disabled: boolean): void {
   tasksOpenButton.disabled = disabled;
   integrationOpenButton.disabled = disabled;
   attentionOpenButton.disabled = disabled;
+  settingsOpenButton.disabled = disabled;
 }
 
 function renderOnboardingChoices(focusSelected = false): void {
@@ -1923,8 +2299,14 @@ function moveOnboardingSelection(offset: number): void {
 
 function saveOnboardingPreferences(): void {
   startupBehavior = parseStartupBehavior(onboardingStartup.value);
+  globalSettings.startupSurface = startupBehavior;
   writeLocalPreference(startupBehaviorStorageKey, startupBehavior);
   writeLocalPreference(onboardingCompletedStorageKey, "true");
+  if (settingsLoaded) {
+    void invoke("settings_save", { request: { settings: globalSettings } }).catch(() => {
+      // The legacy local preference keeps startup behavior available if persistence is unavailable.
+    });
+  }
 }
 
 function closeOnboarding(): void {
@@ -1965,6 +2347,7 @@ function completeOnboarding(choiceId: OnboardingChoiceId): void {
 }
 
 function openOnboarding(): void {
+  hideSettingsSurface();
   onboardingOpen = true;
   onboardingScreen.hidden = false;
   terminalShell.hidden = true;
@@ -1974,6 +2357,7 @@ function openOnboarding(): void {
   agentsView.hidden = true;
   tasksView.hidden = true;
   integrationView.hidden = true;
+  hideSettingsSurface();
   repositoryView.hidden = true;
   attentionView.hidden = true;
   closeRepositoryQuickMenu();
@@ -2012,38 +2396,27 @@ function createPaneRuntime(pane: FramePane): PaneRuntime {
   const host = makeElement("section", "frame-pane") as HTMLDivElement;
   host.dataset.paneId = pane.id;
   host.tabIndex = -1;
+  host.setAttribute("role", "region");
+  host.setAttribute("aria-label", `${pane.session.shell} terminal session`);
 
   const header = makeElement("div", "pane-header");
   header.append(makeElement("span", "pane-title", pane.session.shell));
   header.append(makeElement("span", "pane-cwd", pane.session.cwd));
 
   const terminalHost = makeElement("div", "terminal") as HTMLDivElement;
+  terminalHost.setAttribute("role", "application");
+  terminalHost.setAttribute("aria-label", `Terminal session in ${pane.session.cwd}`);
   host.append(header, terminalHost);
 
+  const settings = effectiveSettings();
   const terminal = new Terminal({
     allowProposedApi: false,
     convertEol: false,
     cursorBlink: true,
     fontFamily: '"Cascadia Mono", "Cascadia Code", Consolas, monospace',
-    fontSize: 14,
+    fontSize: Math.round(14 * settings.fontScale),
     scrollback: 10_000,
-    theme: {
-      background: "#090b0e",
-      foreground: "#e8ecef",
-      cursor: "#ff9c4a",
-      cursorAccent: "#090b0e",
-      selectionBackground: "#36404a",
-      black: "#090b0e",
-      red: "#ff766b",
-      green: "#9ed67a",
-      yellow: "#ffcf70",
-      blue: "#83b8ff",
-      magenta: "#d8a3ff",
-      cyan: "#7bd7d1",
-      white: "#e8ecef",
-      brightBlack: "#68737d",
-      brightWhite: "#ffffff",
-    },
+    theme: terminalTheme(settings),
   });
   const fitAddon = new FitAddon();
   terminal.loadAddon(fitAddon);
@@ -2256,63 +2629,481 @@ function showCommandMessage(message: string): void {
 }
 
 function showSettings(): void {
-  commandMessage.replaceChildren();
-  const title = makeElement("strong", "command-message-title", "Leader chord");
-  const description = makeElement(
-    "p",
-    "command-message-description",
-    "Choose the only chord Arkonad captures. Every other key stays with the focused session.",
-  );
-  const row = makeElement("div", "command-settings-row");
-  const input = makeElement("input", "command-settings-input") as HTMLInputElement;
-  input.type = "text";
-  input.value = leaderChord;
-  input.placeholder = "ctrl+space";
-  input.setAttribute("aria-label", "Leader chord");
-  const save = makeElement("button", "detail-action", "Save") as HTMLButtonElement;
-  save.type = "button";
-  save.addEventListener("click", () => {
-    leaderChord = normalizedLeader(input.value);
-    writeLocalPreference(leaderStorageKey, leaderChord);
-    leaderHint.textContent = `Leader ${leaderLabel()}`;
-    showCommandMessage(`Leader saved as ${leaderLabel()}.`);
-    scheduleWorkspaceSave();
-  });
-  row.append(input, save);
+  closeCommandOverlay();
+  openSettings();
+}
 
-  const startupTitle = makeElement(
-    "strong",
-    "command-message-title",
-    "Startup behavior",
-  );
-  const startupDescription = makeElement(
-    "p",
-    "command-message-description",
-    "Choose the surface Arkonad opens next time. Last Workspace uses the most recent saved Session location.",
-  );
-  const startupRow = makeElement("div", "command-settings-row");
-  const startupLabel = makeElement("label", "command-settings-field");
-  startupLabel.append(makeElement("span", undefined, "Open on startup"));
-  const startupSelect = makeElement("select", "command-settings-input") as HTMLSelectElement;
-  startupSelect.setAttribute("aria-label", "Startup behavior");
-  for (const option of startupBehaviorOptions) {
+function settingsDraftForScope(): SettingsDocument {
+  return normalizeSettings(settingsScopeValue === "workspace" ? effectiveSettings() : globalSettings);
+}
+
+function settingsFieldLabel(label: string, control: HTMLElement, className = "settings-field"): HTMLLabelElement {
+  const field = makeElement("label", className) as HTMLLabelElement;
+  field.append(makeElement("span", undefined, label), control);
+  return field;
+}
+
+function settingsSelect(
+  label: string,
+  value: string,
+  options: Array<{ value: string; label: string }>,
+  disabled = false,
+): HTMLLabelElement {
+  const select = makeElement("select") as HTMLSelectElement;
+  select.setAttribute("aria-label", label);
+  select.disabled = disabled;
+  for (const option of options) {
     const element = makeElement("option") as HTMLOptionElement;
     element.value = option.value;
     element.textContent = option.label;
-    element.selected = option.value === startupBehavior;
-    startupSelect.append(element);
+    element.selected = option.value === value;
+    select.append(element);
   }
-  startupSelect.addEventListener("change", () => {
-    startupBehavior = parseStartupBehavior(startupSelect.value);
-    writeLocalPreference(startupBehaviorStorageKey, startupBehavior);
-    showCommandMessage(`Startup behavior saved as ${startupBehaviorLabel(startupBehavior)}.`);
-  });
-  startupLabel.append(startupSelect);
-  startupRow.append(startupLabel);
+  const field = settingsFieldLabel(label, select);
+  field.dataset.settingsField = label;
+  return field;
+}
 
-  commandMessage.append(title, description, row, startupTitle, startupDescription, startupRow);
-  input.focus();
-  input.select();
+function settingsDescription(parent: HTMLElement, title: string, description: string): void {
+  parent.append(makeElement("h2", "settings-detail-title", title));
+  parent.append(makeElement("p", "settings-detail-description", description));
+}
+
+async function commitSettingsDraft(draft: SettingsDocument): Promise<void> {
+  if (settingsScopeValue === "workspace") {
+    if (!activeWorkspaceId) {
+      settingsNotice.textContent = "Open or save a Workspace before storing a Workspace override.";
+      return;
+    }
+    workspaceSettingsOverrides = {
+      leaderChord: normalizedLeader(draft.leaderChord),
+      shellProfileId: draft.defaultShellProfileId,
+      theme: draft.theme,
+      motion: draft.motion,
+      transparency: draft.transparency,
+      fontScale: draft.fontScale,
+      highContrast: draft.highContrast,
+      screenReaderLabels: draft.screenReaderLabels,
+      appUpdatePolicy: draft.appUpdatePolicy,
+    };
+    applySettingsToFrame();
+    scheduleWorkspaceSave();
+    settingsNotice.textContent = `Saved overrides for ${activeWorkspaceName}. Global settings were not changed.`;
+    renderSettingsSection();
+    return;
+  }
+
+  try {
+    const saved = await invoke<SettingsDocument>("settings_save", { request: { settings: draft } });
+    globalSettings = normalizeSettings(saved);
+    settingsConfigText = JSON.stringify(globalSettings, null, 2);
+    writeLocalPreference(leaderStorageKey, globalSettings.leaderChord);
+    writeLocalPreference(startupBehaviorStorageKey, globalSettings.startupSurface);
+    applySettingsToFrame();
+    settingsNotice.textContent = "Global settings saved. Existing Sessions keep their launch snapshot.";
+    renderSettingsSection();
+  } catch (error) {
+    settingsNotice.textContent = `Settings were not saved: ${String(error)}`;
+  }
+}
+
+function renderSettingsGeneral(): void {
+  const draft = settingsDraftForScope();
+  settingsDescription(
+    settingsDetail,
+    "General",
+    settingsScopeValue === "workspace"
+      ? "These values apply only while the active Workspace is open. Startup surface remains a global choice."
+      : "Set the small group of choices that control how Arkonad opens and how it asks before app updates.",
+  );
+  const form = makeElement("div", "settings-form");
+  const leader = makeElement("input") as HTMLInputElement;
+  leader.type = "text";
+  leader.value = draft.leaderChord;
+  leader.placeholder = "ctrl+space";
+  leader.setAttribute("aria-label", "Arkonad Leader chord");
+  form.append(settingsFieldLabel("Arkonad Leader chord", leader));
+
+  const startup = settingsSelect(
+    "Startup surface",
+    draft.startupSurface,
+    startupBehaviorOptions,
+    settingsScopeValue === "workspace",
+  );
+  form.append(startup);
+  const update = settingsSelect("App update policy", draft.appUpdatePolicy, updatePolicyOptions);
+  form.append(update);
+  form.append(makeElement(
+    "p",
+    "settings-help",
+    "Arkonad never installs or updates a Catalog Tool silently. Hosted tools keep their own sign-in and update behavior.",
+  ));
+  form.append(createInstallButton("Save General settings", () => {
+    const next = { ...draft };
+    next.leaderChord = normalizedLeader(leader.value);
+    next.startupSurface = parseStartupBehavior((startup.querySelector("select") as HTMLSelectElement).value);
+    next.appUpdatePolicy = normalizeUpdatePolicy((update.querySelector("select") as HTMLSelectElement).value);
+    void commitSettingsDraft(next);
+  }));
+  settingsDetail.append(form);
+}
+
+function renderSettingsAppearance(): void {
+  const draft = settingsDraftForScope();
+  settingsDescription(
+    settingsDetail,
+    "Appearance",
+    "Themes apply to the Arkonad Frame, status controls, dialogs, and terminal renderer. Hosted Catalog Tools retain their native appearance.",
+  );
+  const form = makeElement("div", "settings-form");
+  const theme = settingsSelect("Theme", draft.theme, themeOptions);
+  const motion = settingsSelect("Motion", draft.motion, motionOptions);
+  const transparency = settingsSelect("Transparency", draft.transparency, transparencyOptions);
+  form.append(theme, motion, transparency);
+  form.append(createInstallButton("Save Appearance settings", () => {
+    const next = { ...draft };
+    next.theme = normalizeTheme((theme.querySelector("select") as HTMLSelectElement).value);
+    next.motion = normalizeMotion((motion.querySelector("select") as HTMLSelectElement).value);
+    next.transparency = normalizeTransparency((transparency.querySelector("select") as HTMLSelectElement).value);
+    void commitSettingsDraft(next);
+  }));
+  settingsDetail.append(form);
+}
+
+function renderSettingsAccessibility(): void {
+  const draft = settingsDraftForScope();
+  settingsDescription(
+    settingsDetail,
+    "Accessibility",
+    "These controls change Arkonad-owned surfaces and host labels. Native tool output is not rewritten or restyled by Arkonad.",
+  );
+  const form = makeElement("div", "settings-form");
+  const scale = settingsSelect(
+    "Font scale",
+    String(draft.fontScale),
+    [0.8, 0.9, 1, 1.1, 1.25, 1.5].map((value) => ({ value: String(value), label: `${Math.round(value * 100)}%` })),
+  );
+  form.append(scale);
+  const contrast = makeElement("input") as HTMLInputElement;
+  contrast.type = "checkbox";
+  contrast.checked = draft.highContrast;
+  contrast.setAttribute("aria-label", "High contrast mode");
+  const contrastLabel = makeElement("label", "settings-check") as HTMLLabelElement;
+  contrastLabel.append(contrast, makeElement("span", undefined, "High contrast host controls"));
+  form.append(contrastLabel);
+  const labels = makeElement("input") as HTMLInputElement;
+  labels.type = "checkbox";
+  labels.checked = draft.screenReaderLabels;
+  labels.setAttribute("aria-label", "Verbose screen-reader labels");
+  const labelsLabel = makeElement("label", "settings-check") as HTMLLabelElement;
+  labelsLabel.append(labels, makeElement("span", undefined, "Use descriptive labels for host controls"));
+  form.append(labelsLabel);
+  form.append(makeElement(
+    "p",
+    "settings-help",
+    "Visible focus remains on keyboard controls in every mode. Reduced motion also follows the operating system when Motion is set to System.",
+  ));
+  form.append(createInstallButton("Save Accessibility settings", () => {
+    const next = { ...draft };
+    next.fontScale = Number((scale.querySelector("select") as HTMLSelectElement).value);
+    next.highContrast = contrast.checked;
+    next.screenReaderLabels = labels.checked;
+    void commitSettingsDraft(next);
+  }));
+  settingsDetail.append(form);
+}
+
+function renderSettingsShells(): void {
+  const draft = settingsDraftForScope();
+  settingsDescription(
+    settingsDetail,
+    "Shell profiles",
+    settingsScopeValue === "workspace"
+      ? "Choose a different shell for this Workspace. Profile definitions remain global so a Workspace cannot silently invent a command."
+      : "Choose the shell for new Sessions and keep explicit profiles for PowerShell, CMD, WSL, or another declared executable.",
+  );
+  const form = makeElement("div", "settings-form");
+  const defaultShell = settingsSelect(
+    "Default shell",
+    draft.defaultShellProfileId,
+    draft.shellProfiles.map((profile) => ({ value: profile.id, label: `${profile.label} · ${profile.executable ?? "auto-detect"}` })),
+  );
+  form.append(defaultShell);
+  const profileList = makeElement("div", "settings-profile-list");
+  const profileInputs: Array<{ label: HTMLInputElement; executable: HTMLInputElement }> = [];
+  for (const profile of draft.shellProfiles) {
+    const row = makeElement("div", "settings-profile-row");
+    const id = makeElement("input") as HTMLInputElement;
+    id.value = profile.id;
+    id.disabled = true;
+    id.setAttribute("aria-label", `${profile.label} profile id`);
+    const label = makeElement("input") as HTMLInputElement;
+    label.value = profile.label;
+    label.disabled = settingsScopeValue === "workspace";
+    label.setAttribute("aria-label", `${profile.label} display name`);
+    const executable = makeElement("input") as HTMLInputElement;
+    executable.value = profile.executable ?? "";
+    executable.placeholder = "auto-detect when empty";
+    executable.disabled = settingsScopeValue === "workspace";
+    executable.setAttribute("aria-label", `${profile.label} executable`);
+    row.append(
+      settingsFieldLabel("ID", id, "settings-profile-field"),
+      settingsFieldLabel("Label", label, "settings-profile-field"),
+      settingsFieldLabel("Executable", executable, "settings-profile-field"),
+    );
+    profileList.append(row);
+    profileInputs.push({ label, executable });
+  }
+  form.append(profileList);
+  if (settingsScopeValue === "global") {
+    form.append(createInstallButton("Add shell profile", () => {
+      draft.shellProfiles.push({ id: `shell-${Date.now()}`, label: "Custom shell", executable: "" });
+      renderSettingsSection();
+    }));
+  } else {
+    form.append(makeElement("p", "settings-help", "Edit profile definitions from the All Workspaces scope or Advanced config."));
+  }
+  form.append(createInstallButton("Save Shell settings", () => {
+    const next = {
+      ...draft,
+      shellProfiles: draft.shellProfiles.map((profile, index) => ({
+        ...profile,
+        label: profileInputs[index].label.value.trim() || profile.label,
+        executable: profileInputs[index].executable.value.trim() || null,
+      })),
+      defaultShellProfileId: (defaultShell.querySelector("select") as HTMLSelectElement).value,
+    };
+    void commitSettingsDraft(next);
+  }));
+  settingsDetail.append(form);
+}
+
+function downloadSettings(contents: string): void {
+  const url = URL.createObjectURL(new Blob([contents], { type: "application/json" }));
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = "arkonad-settings.json";
+  link.click();
+  window.setTimeout(() => URL.revokeObjectURL(url), 0);
+}
+
+function renderSettingsAdvanced(): void {
+  settingsDescription(
+    settingsDetail,
+    "Advanced config",
+    "This is the human-readable global settings file. Validate changes before applying them; invalid imports leave the saved file and current settings unchanged.",
+  );
+  const editor = makeElement("textarea", "settings-config-editor") as HTMLTextAreaElement;
+  editor.rows = 24;
+  editor.spellcheck = false;
+  editor.setAttribute("aria-label", "Arkonad settings JSON");
+  editor.value = settingsConfigText || JSON.stringify(globalSettings, null, 2);
+  editor.addEventListener("input", () => {
+    settingsConfigText = editor.value;
+  });
+  settingsDetail.append(editor);
+  const actions = makeElement("div", "install-button-row");
+  actions.append(
+    createInstallButton("Validate JSON", () => {
+      void invoke<SettingsValidationResult>("settings_validate", { contents: editor.value })
+        .then((result) => {
+          settingsNotice.textContent = result.valid ? result.message : `Config not applied: ${result.message}`;
+        })
+        .catch((error: unknown) => {
+          settingsNotice.textContent = `Could not validate config: ${String(error)}`;
+        });
+    }),
+    createInstallButton("Apply valid config", () => {
+      void invoke<SettingsDocument>("settings_import", { request: { contents: editor.value } })
+        .then((saved) => {
+          globalSettings = normalizeSettings(saved);
+          settingsConfigText = JSON.stringify(globalSettings, null, 2);
+          writeLocalPreference(leaderStorageKey, globalSettings.leaderChord);
+          writeLocalPreference(startupBehaviorStorageKey, globalSettings.startupSurface);
+          applySettingsToFrame();
+          settingsNotice.textContent = "Config applied. Invalid or unsafe values were not accepted.";
+          renderSettingsSection();
+        })
+        .catch((error: unknown) => {
+          settingsNotice.textContent = `Config was not applied: ${String(error)}`;
+        });
+    }),
+    createInstallButton("Export JSON", () => {
+      void invoke<string>("settings_export")
+        .then((contents) => downloadSettings(contents))
+        .catch((error: unknown) => {
+          settingsNotice.textContent = `Could not export config: ${String(error)}`;
+        });
+    }),
+    createInstallButton("Import file", () => settingsImportInput?.click()),
+    createInstallButton("Copy JSON", () => {
+      const copy = navigator.clipboard?.writeText(editor.value);
+      if (!copy) {
+        settingsNotice.textContent = "Clipboard access is unavailable; use Export JSON instead.";
+        return;
+      }
+      void copy.then(() => {
+        settingsNotice.textContent = "Config copied to the clipboard.";
+      }).catch(() => {
+        settingsNotice.textContent = "Clipboard access is unavailable; use Export JSON instead.";
+      });
+    }),
+  );
+  settingsDetail.append(actions);
+  settingsImportInput = makeElement("input") as HTMLInputElement;
+  settingsImportInput.type = "file";
+  settingsImportInput.accept = ".json,application/json";
+  settingsImportInput.hidden = true;
+  settingsImportInput.setAttribute("aria-label", "Import Arkonad settings JSON file");
+  settingsImportInput.addEventListener("change", () => {
+    const file = settingsImportInput?.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      settingsConfigText = typeof reader.result === "string" ? reader.result : "";
+      renderSettingsSection();
+      settingsNotice.textContent = "Config loaded into the editor. Validate it before applying.";
+    };
+    reader.readAsText(file);
+  });
+  settingsDetail.append(settingsImportInput);
+}
+
+function renderSettingsSection(): void {
+  settingsDetail.replaceChildren();
+  if (!settingsLoaded) {
+    settingsDetail.append(makeElement("p", "detail-empty", "Loading validated settings…"));
+    return;
+  }
+  switch (settingsSection) {
+    case "appearance":
+      renderSettingsAppearance();
+      break;
+    case "accessibility":
+      renderSettingsAccessibility();
+      break;
+    case "shells":
+      renderSettingsShells();
+      break;
+    case "advanced":
+      renderSettingsAdvanced();
+      break;
+    default:
+      renderSettingsGeneral();
+      break;
+  }
+}
+
+function renderSettingsSections(focusSelected = false): void {
+  settingsSections.replaceChildren();
+  for (const item of settingsSectionMeta) {
+    const row = makeElement("button", "store-row") as HTMLButtonElement;
+    row.type = "button";
+    row.role = "option";
+    row.dataset.settingsSection = item.id;
+    row.setAttribute("aria-selected", String(item.id === settingsSection));
+    row.classList.toggle("is-selected", item.id === settingsSection);
+    row.append(
+      makeElement("div", "store-row-top", item.label),
+      makeElement("div", "store-row-summary", item.summary),
+    );
+    row.addEventListener("click", () => selectSettingsSection(item.id));
+    settingsSections.append(row);
+  }
+  if (focusSelected) {
+    window.requestAnimationFrame(() => {
+      settingsSections.querySelector<HTMLButtonElement>(`[data-settings-section="${settingsSection}"]`)?.focus();
+    });
+  }
+}
+
+function selectSettingsSection(section: SettingsSection, focusRow = false): void {
+  settingsSection = section;
+  renderSettingsSections(focusRow);
+  renderSettingsSection();
+}
+
+function moveSettingsSelection(offset: number): void {
+  const index = settingsSectionMeta.findIndex((item) => item.id === settingsSection);
+  const next = settingsSectionMeta[(Math.max(0, index) + offset + settingsSectionMeta.length) % settingsSectionMeta.length];
+  selectSettingsSection(next.id, true);
+}
+
+function hideSettingsSurface(): void {
+  settingsView.hidden = true;
+  settingsOpenButton.setAttribute("aria-expanded", "false");
+}
+
+async function loadSettingsDocument(): Promise<void> {
+  if (settingsLoaded || settingsLoading) return;
+  settingsLoading = true;
+  try {
+    const result = await invoke<SettingsLoadResult>("settings_load");
+    globalSettings = normalizeSettings(result.settings);
+    const legacyLeader = readLocalPreference(leaderStorageKey);
+    const legacyStartup = readLocalPreference(startupBehaviorStorageKey);
+    if (result.status === "default" && legacyLeader) globalSettings.leaderChord = normalizedLeader(legacyLeader);
+    if (result.status === "default" && legacyStartup) globalSettings.startupSurface = parseStartupBehavior(legacyStartup);
+    settingsConfigText = JSON.stringify(globalSettings, null, 2);
+    settingsLoaded = true;
+    applySettingsToFrame();
+    writeLocalPreference(leaderStorageKey, globalSettings.leaderChord);
+    writeLocalPreference(startupBehaviorStorageKey, globalSettings.startupSurface);
+    if (result.status === "default" && (legacyLeader || legacyStartup)) {
+      void invoke("settings_save", { request: { settings: globalSettings } }).catch(() => {
+        // Local preferences remain a safe fallback if the first migration cannot be saved.
+      });
+    }
+    settingsNotice.textContent = result.message;
+  } catch (error) {
+    globalSettings = defaultSettings();
+    settingsLoaded = true;
+    applySettingsToFrame();
+    settingsNotice.textContent = `Could not read saved settings: ${String(error)} Safe defaults are active.`;
+  } finally {
+    settingsLoading = false;
+    if (activeSurface === "settings") {
+      renderSettingsSections();
+      renderSettingsSection();
+    }
+  }
+}
+
+function openSettings(): void {
+  closeRepositoryQuickMenu();
+  if (!settingsLoaded) void loadSettingsDocument();
+  storeOpen = true;
+  activeSurface = "settings";
+  terminalShell.hidden = true;
+  launchpadView.hidden = true;
+  storeView.hidden = true;
+  appsView.hidden = true;
+  agentsView.hidden = true;
+  tasksView.hidden = true;
+  integrationView.hidden = true;
+  settingsView.hidden = false;
+  repositoryView.hidden = true;
+  attentionView.hidden = true;
+  launchpadOpenButton.setAttribute("aria-expanded", "false");
+  storeOpenButton.setAttribute("aria-expanded", "false");
+  appsOpenButton.setAttribute("aria-expanded", "false");
+  agentsOpenButton.setAttribute("aria-expanded", "false");
+  tasksOpenButton.setAttribute("aria-expanded", "false");
+  integrationOpenButton.setAttribute("aria-expanded", "false");
+  settingsOpenButton.setAttribute("aria-expanded", "true");
+  repositoryOpenButton.setAttribute("aria-expanded", "false");
+  attentionOpenButton.setAttribute("aria-expanded", "false");
+  settingsScope.disabled = !activeWorkspaceId;
+  if (!activeWorkspaceId && settingsScopeValue === "workspace") settingsScopeValue = "global";
+  settingsScope.value = settingsScopeValue;
+  sessionMeta.textContent = "settings";
+  status.textContent = "settings";
+  status.dataset.state = "ready";
+  renderSettingsSections();
+  renderSettingsSection();
+  window.requestAnimationFrame(() => {
+    settingsSections.querySelector<HTMLButtonElement>(`[data-settings-section="${settingsSection}"]`)?.focus();
+  });
 }
 
 function frameCommands(): FrameCommand[] {
@@ -2521,7 +3312,7 @@ function frameCommands(): FrameCommand[] {
     {
       id: "settings",
       label: "Settings",
-      description: "Change the Leader chord and startup behavior.",
+      description: "Configure the Leader, startup, shell profiles, theme, accessibility, and app update policy.",
       run: showSettings,
     },
   ];
@@ -2623,7 +3414,7 @@ function frameRequest(): { cols: number; rows: number; cwd: string | null; shell
     cols: dimensions?.cols ?? 120,
     rows: dimensions?.rows ?? 40,
     cwd: focusedPane()?.session.cwd ?? null,
-    shell: null,
+    shell: effectiveShellProfile()?.executable ?? null,
   };
 }
 
@@ -2772,6 +3563,7 @@ function renderWorkspaceRecovery(): void {
 }
 
 function openWorkspaceRecovery(document: WorkspaceDocument, message: string): void {
+  hideSettingsSurface();
   if (activeWorkspaceId !== document.id) {
     sessionAgentOverrides.clear();
   }
@@ -2779,12 +3571,11 @@ function openWorkspaceRecovery(document: WorkspaceDocument, message: string): vo
   activeWorkspaceId = document.id;
   activeWorkspaceName = document.name;
   workspaceAgentPolicies = normalizeAgentPolicies(document.settings?.agentPolicies);
-  const savedLeaderChord = document.settings?.leaderChord;
-  if (typeof savedLeaderChord === "string" && savedLeaderChord.trim()) {
-    leaderChord = normalizedLeader(savedLeaderChord);
-    localStorage.setItem(leaderStorageKey, leaderChord);
-    leaderHint.textContent = `Leader ${leaderLabel()}`;
+  workspaceSettingsOverrides = normalizeWorkspaceOverrides(document.settings?.overrides);
+  if (!workspaceSettingsOverrides.leaderChord && document.settings?.leaderChord) {
+    workspaceSettingsOverrides.leaderChord = normalizedLeader(document.settings.leaderChord);
   }
+  applySettingsToFrame();
   workspaceRecoveryOpen = true;
   workspaceRecovery.hidden = false;
   terminalShell.hidden = true;
@@ -2829,6 +3620,8 @@ async function discardWorkspaceAndOpenShell(): Promise<void> {
   pendingWorkspace = null;
   activeWorkspaceId = null;
   workspaceAgentPolicies = {};
+  workspaceSettingsOverrides = {};
+  applySettingsToFrame();
   closeWorkspaceRecovery();
   if (frameSnapshot.tabs.length > 0) {
     try {
@@ -3052,8 +3845,8 @@ async function saveWorkspaceNow(): Promise<void> {
         appPins: launchpadEntries.filter((entry) => entry.pinned).map((entry) => entry.id),
         launchProfiles: customAppEntries,
         settings: {
-          leaderChord,
           agentPolicies: workspaceAgentPolicies,
+          overrides: workspaceSettingsOverrides,
         },
       },
     });
@@ -3776,6 +4569,7 @@ function scheduleAgentRefresh(): void {
 }
 
 function openAgentCockpit(): void {
+  hideSettingsSurface();
   closeRepositoryQuickMenu();
   integrationView.hidden = true;
   integrationOpenButton.setAttribute("aria-expanded", "false");
@@ -4480,6 +5274,7 @@ async function refreshAgentTasks(): Promise<void> {
 }
 
 function openAgentTasks(): void {
+  hideSettingsSurface();
   closeRepositoryQuickMenu();
   integrationView.hidden = true;
   integrationOpenButton.setAttribute("aria-expanded", "false");
@@ -5339,6 +6134,7 @@ async function refreshIntegrationState(): Promise<void> {
 }
 
 function openIntegrationView(): void {
+  hideSettingsSurface();
   closeRepositoryQuickMenu();
   storeOpen = true;
   activeSurface = "integration";
@@ -6027,6 +6823,7 @@ function openRepositoryQuickMenu(): void {
 }
 
 function openRepositoryView(section: RepositorySection = "summary"): void {
+  hideSettingsSurface();
   closeRepositoryQuickMenu();
   integrationView.hidden = true;
   integrationOpenButton.setAttribute("aria-expanded", "false");
@@ -6055,6 +6852,7 @@ function openRepositoryView(section: RepositorySection = "summary"): void {
 }
 
 function openAttentionQueue(): void {
+  hideSettingsSurface();
   closeRepositoryQuickMenu();
   integrationView.hidden = true;
   integrationOpenButton.setAttribute("aria-expanded", "false");
@@ -6073,6 +6871,7 @@ function openAttentionQueue(): void {
   agentsView.hidden = true;
   tasksView.hidden = true;
   integrationView.hidden = true;
+  settingsView.hidden = true;
   repositoryView.hidden = true;
   attentionView.hidden = false;
   launchpadOpenButton.setAttribute("aria-expanded", "false");
@@ -7146,6 +7945,7 @@ function scheduleLaunchpadRefresh(): void {
 }
 
 function openLaunchpad(): void {
+  hideSettingsSurface();
   closeRepositoryQuickMenu();
   integrationView.hidden = true;
   integrationOpenButton.setAttribute("aria-expanded", "false");
@@ -7588,10 +8388,16 @@ async function refreshMyApps(): Promise<void> {
       "aria-label",
       snapshot.updatesAvailable === 0 ? "My Apps" : `My Apps, ${updateLabel}`,
     );
-    appsNotice.textContent =
-      snapshot.updatesAvailable === 0
-        ? "Detected installations stay external; managed actions use their recorded method."
-        : `${updateLabel}. Review before installing; Arkonad will not update automatically.`;
+    const updatePolicy = effectiveSettings().appUpdatePolicy;
+    appsNotice.textContent = snapshot.updatesAvailable === 0
+      ? updatePolicy === "never"
+        ? "Update checks run only when you open My Apps. No reviewed updates are currently listed."
+        : "Detected installations stay external; managed actions use their recorded method."
+      : updatePolicy === "notify"
+        ? `${updateLabel}. Notify-only policy is active; no update flow was started.`
+        : updatePolicy === "never"
+          ? `${updateLabel}. This check was started by opening My Apps; no update flow was started.`
+          : `${updateLabel}. Review before installing; Arkonad will not update automatically.`;
     renderMyAppsList();
     scheduleWorkspaceSave();
   } catch (error) {
@@ -7872,6 +8678,7 @@ function scheduleStoreRefresh(): void {
 }
 
 function openStore(category?: CatalogCategory | "", focusId?: string): void {
+  hideSettingsSurface();
   closeRepositoryQuickMenu();
   integrationView.hidden = true;
   integrationOpenButton.setAttribute("aria-expanded", "false");
@@ -7917,6 +8724,7 @@ function openStore(category?: CatalogCategory | "", focusId?: string): void {
 }
 
 function openMyApps(): void {
+  hideSettingsSurface();
   closeRepositoryQuickMenu();
   integrationView.hidden = true;
   integrationOpenButton.setAttribute("aria-expanded", "false");
@@ -7967,6 +8775,7 @@ function closeSurface(): void {
   agentsView.hidden = true;
   tasksView.hidden = true;
   integrationView.hidden = true;
+  settingsView.hidden = true;
   repositoryView.hidden = true;
   attentionView.hidden = true;
   terminalShell.hidden = false;
@@ -7976,6 +8785,7 @@ function closeSurface(): void {
   agentsOpenButton.setAttribute("aria-expanded", "false");
   tasksOpenButton.setAttribute("aria-expanded", "false");
   integrationOpenButton.setAttribute("aria-expanded", "false");
+  settingsOpenButton.setAttribute("aria-expanded", "false");
   repositoryOpenButton.setAttribute("aria-expanded", "false");
   attentionOpenButton.setAttribute("aria-expanded", "false");
   updateFocusedSession();
@@ -8002,12 +8812,14 @@ agentsOpenButton.addEventListener("click", openAgentCockpit);
 tasksOpenButton.addEventListener("click", openAgentTasks);
 integrationOpenButton.addEventListener("click", openIntegrationView);
 attentionOpenButton.addEventListener("click", openAttentionQueue);
+settingsOpenButton.addEventListener("click", openSettings);
 launchpadCloseButton.addEventListener("click", closeSurface);
 storeCloseButton.addEventListener("click", closeSurface);
 appsCloseButton.addEventListener("click", closeSurface);
 agentsCloseButton.addEventListener("click", closeSurface);
 tasksCloseButton.addEventListener("click", closeSurface);
 integrationCloseButton.addEventListener("click", closeSurface);
+settingsCloseButton.addEventListener("click", closeSurface);
 attentionCloseButton.addEventListener("click", closeSurface);
 commandCloseButton.addEventListener("click", closeCommandOverlay);
 commandSearch.addEventListener("input", renderCommandList);
@@ -8073,6 +8885,30 @@ storeList.addEventListener("keydown", (event) => {
 appsSearch.addEventListener("input", scheduleMyAppsRefresh);
 agentSearch.addEventListener("input", scheduleAgentRefresh);
 tasksSearch.addEventListener("input", renderAgentTaskCenter);
+settingsScope.addEventListener("change", () => {
+  settingsScopeValue = settingsScope.value === "workspace" ? "workspace" : "global";
+  renderSettingsSection();
+});
+settingsSections.addEventListener("keydown", (event) => {
+  if (event.key === "ArrowDown") {
+    event.preventDefault();
+    moveSettingsSelection(1);
+  } else if (event.key === "ArrowUp") {
+    event.preventDefault();
+    moveSettingsSelection(-1);
+  } else if (event.key === "Home") {
+    event.preventDefault();
+    selectSettingsSection(settingsSectionMeta[0].id, true);
+  } else if (event.key === "End") {
+    event.preventDefault();
+    selectSettingsSection(settingsSectionMeta.at(-1)!.id, true);
+  } else if (event.key === "Enter") {
+    event.preventDefault();
+    const activeRow = event.target instanceof HTMLButtonElement ? event.target : undefined;
+    const section = activeRow?.dataset.settingsSection as SettingsSection | undefined;
+    if (section) selectSettingsSection(section, true);
+  }
+});
 integrationRefreshButton.addEventListener("click", () => void refreshIntegrationState());
 integrationWorkstreams.addEventListener("keydown", (event) => {
   if (event.key === "ArrowDown") {
@@ -8450,9 +9286,12 @@ async function startSession(preferredCwd: string | null = null): Promise<void> {
 }
 
 leaderHint.textContent = `Leader ${leaderLabel()}`;
-void refreshAgentSupervision();
-if (readLocalPreference(onboardingCompletedStorageKey) === "true") {
-  openStartupBehavior();
-} else {
-  openOnboarding();
-}
+void (async () => {
+  await loadSettingsDocument();
+  void refreshAgentSupervision();
+  if (readLocalPreference(onboardingCompletedStorageKey) === "true") {
+    openStartupBehavior();
+  } else {
+    openOnboarding();
+  }
+})();
