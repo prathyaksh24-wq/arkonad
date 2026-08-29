@@ -855,7 +855,8 @@ type ManagementPlan = {
 };
 
 type StartupBehavior = "terminal" | "store" | "apps" | "launchpad" | "lastWorkspace";
-type ThemeId = "ember" | "midnight" | "carbon";
+type ThemeId = "ember" | "midnight" | "carbon" | "amber" | "phosphor" | "gruvbox" | "dracula" | "google84";
+type PetId = "none" | "gengar" | "snorlax";
 type MotionPreference = "system" | "reduced" | "full";
 type TransparencyPreference = "solid" | "subtle" | "glass";
 type AppUpdatePolicy = "review" | "notify" | "never";
@@ -873,6 +874,7 @@ type SettingsDocument = {
   defaultShellProfileId: string;
   shellProfiles: ShellProfile[];
   theme: ThemeId;
+  pet: PetId;
   motion: MotionPreference;
   transparency: TransparencyPreference;
   fontScale: number;
@@ -908,7 +910,7 @@ type SettingsValidationResult = {
 type SettingsSection = "general" | "appearance" | "accessibility" | "shells" | "advanced";
 type SettingsScope = "global" | "workspace";
 
-type OnboardingChoiceId = "terminal" | "store" | "apps" | "agent" | "restore";
+type OnboardingChoiceId = "quick" | "custom" | "plain";
 
 type OnboardingChoice = {
   id: OnboardingChoiceId;
@@ -919,34 +921,22 @@ type OnboardingChoice = {
 
 const onboardingChoices: OnboardingChoice[] = [
   {
-    id: "terminal",
-    label: "Open Terminal",
-    description: "Start a blank shell session in the current directory.",
-    detail: "Nothing is installed or connected.",
+    id: "quick",
+    label: "Quick start",
+    description: "Open the launcher and use tools Arkonad can already find.",
+    detail: "Best default. Nothing is installed or connected automatically.",
   },
   {
-    id: "store",
-    label: "Browse Store",
-    description: "Explore Catalog Tools before deciding whether to install one.",
-    detail: "Install review starts only after you choose a tool.",
+    id: "custom",
+    label: "Choose tools",
+    description: "Browse all 32 Awesome TUI AI projects and Arkonad's extra tools.",
+    detail: "Every install remains an explicit review and confirmation.",
   },
   {
-    id: "apps",
-    label: "My Apps",
-    description: "See tools Arkonad can already detect or launch.",
-    detail: "Existing installations remain under their own ownership.",
-  },
-  {
-    id: "agent",
-    label: "Use a Coding Agent",
-    description: "Browse coding agents that can run in an Arkonad Session.",
-    detail: "Sign-in and agent permissions stay inside the selected tool.",
-  },
-  {
-    id: "restore",
-    label: "Restore Workspace",
-    description: "Open the last saved Workspace location when one is available.",
-    detail: "If there is no saved location, Arkonad opens a blank shell.",
+    id: "plain",
+    label: "Just the terminal",
+    description: "Start a normal shell with no launcher in the way.",
+    detail: "Open the launcher or Store later with the command palette.",
   },
 ];
 
@@ -991,7 +981,7 @@ function parseStartupBehavior(value: string | null): StartupBehavior {
     case "terminal":
       return value;
     default:
-      return "terminal";
+      return "launchpad";
   }
 }
 
@@ -1011,6 +1001,11 @@ const themeOptions: Array<{ value: ThemeId; label: string; description: string }
   { value: "ember", label: "Ember", description: "Near-black surfaces with a warm ember focus accent." },
   { value: "midnight", label: "Midnight", description: "Near-black surfaces with a cooler blue focus accent." },
   { value: "carbon", label: "Carbon", description: "Neutral graphite surfaces with a quiet green focus accent." },
+  { value: "amber", label: "Amber", description: "Classic amber terminal text on black." },
+  { value: "phosphor", label: "Phosphor", description: "Green phosphor terminal palette." },
+  { value: "gruvbox", label: "Gruvbox", description: "Warm, muted retro terminal colors." },
+  { value: "dracula", label: "Dracula", description: "Purple and cyan on charcoal." },
+  { value: "google84", label: "Google 84", description: "Black terminal with primary-color accents." },
 ];
 
 const motionOptions: Array<{ value: MotionPreference; label: string }> = [
@@ -1043,10 +1038,11 @@ function defaultSettings(): SettingsDocument {
   return {
     schemaVersion: 1,
     leaderChord: "ctrl+space",
-    startupSurface: "terminal",
+    startupSurface: "launchpad",
     defaultShellProfileId: "auto",
     shellProfiles: defaultShellProfiles.map((profile) => ({ ...profile })),
     theme: "ember",
+    pet: "none",
     motion: "system",
     transparency: "solid",
     fontScale: 1,
@@ -1057,7 +1053,13 @@ function defaultSettings(): SettingsDocument {
 }
 
 function normalizeTheme(value: unknown): ThemeId {
-  return value === "midnight" || value === "carbon" ? value : "ember";
+  return value === "midnight" || value === "carbon" || value === "amber"
+    || value === "phosphor" || value === "gruvbox" || value === "dracula"
+    || value === "google84" ? value : "ember";
+}
+
+function normalizePet(value: unknown): PetId {
+  return value === "gengar" || value === "snorlax" ? value : "none";
 }
 
 function normalizeMotion(value: unknown): MotionPreference {
@@ -1115,6 +1117,7 @@ function normalizeSettings(value: unknown): SettingsDocument {
     defaultShellProfileId,
     shellProfiles,
     theme: normalizeTheme(candidate.theme),
+    pet: normalizePet(candidate.pet),
     motion: normalizeMotion(candidate.motion),
     transparency: normalizeTransparency(candidate.transparency),
     fontScale,
@@ -1270,17 +1273,17 @@ app.innerHTML = `
       >
         <div class="onboarding-card">
           <header class="onboarding-heading">
-            <span class="store-eyebrow">FIRST RUN · ONBOARDING</span>
-            <h1 id="onboarding-title">Choose how to start Arkonad</h1>
+            <span class="store-eyebrow">ARKONAD // FIRST RUN</span>
+            <h1 id="onboarding-title">Your terminal, with more doors.</h1>
             <p id="onboarding-description">
-              Arkonad hosts terminal apps in Sessions. Nothing is installed, signed in, or connected during this step.
+              Use ↑↓ and Enter. Arkonad runs shells and third-party TUIs in real terminal sessions; this step changes no files and connects no accounts.
             </p>
           </header>
           <div class="onboarding-content">
             <section class="onboarding-choice-panel" aria-labelledby="onboarding-choice-heading">
               <div class="onboarding-panel-heading">
-                <span id="onboarding-choice-heading">Start here</span>
-                <span class="onboarding-panel-hint">↑↓ choose · Enter open</span>
+                <span id="onboarding-choice-heading">How should we begin?</span>
+                <span class="onboarding-panel-hint">↑↓ move // Enter select</span>
               </div>
               <div
                 class="onboarding-options"
@@ -1289,8 +1292,8 @@ app.innerHTML = `
                 aria-label="First-run choices"
               ></div>
             </section>
-            <section class="onboarding-preferences" aria-labelledby="onboarding-preferences-heading">
-              <span class="store-eyebrow" id="onboarding-preferences-heading">NEXT TIME</span>
+            <section class="onboarding-preferences" aria-labelledby="onboarding-preferences-heading" hidden>
+              <span class="store-eyebrow" id="onboarding-preferences-heading">STARTUP</span>
               <label class="onboarding-select-control">
                 <span>When Arkonad opens again</span>
                 <select data-onboarding-startup aria-label="Startup behavior">
@@ -1308,9 +1311,9 @@ app.innerHTML = `
             </section>
           </div>
           <footer class="onboarding-footer">
-            <span>Enter open</span>
-            <span>Esc terminal</span>
-            <span>Plain-language help is on this screen</span>
+            <span>↑↓ move</span>
+            <span>Enter select</span>
+            <span>Esc plain terminal</span>
           </footer>
         </div>
       </section>
@@ -1406,8 +1409,8 @@ app.innerHTML = `
       <section class="store-shell" data-store-view hidden aria-label="Terminal App Store">
         <div class="store-toolbar">
           <div class="store-heading">
-            <span class="store-eyebrow">TERMINAL APP STORE</span>
-            <span class="store-title">Find a tool, then launch it in Arkonad</span>
+            <span class="store-eyebrow">ARKONAD // STORE</span>
+            <span class="store-title">32 Awesome TUI AI projects + Arkonad tools</span>
           </div>
           <label class="store-control">
             <span>Search</span>
@@ -2004,11 +2007,12 @@ let attentionRequestId = 0;
 const supervisedSessionIds = new Set<string>();
 const agentObservationBuffers = new Map<string, string>();
 const agentObservationTimers = new Map<string, number>();
+const launchedReturnTabs = new Map<string, string | null>();
 let commandOverlayOpen = false;
 let selectedCommandId: string | undefined;
 let pendingClose: "pane" | "tab" | undefined;
 let onboardingOpen = false;
-let selectedOnboardingChoice: OnboardingChoiceId = "terminal";
+let selectedOnboardingChoice: OnboardingChoiceId = "quick";
 let globalSettings: SettingsDocument = defaultSettings();
 let workspaceSettingsOverrides: WorkspaceSettingsOverrides = {};
 let settingsLoaded = false;
@@ -2086,7 +2090,7 @@ function applySettingsToFrame(): void {
 }
 
 function terminalTheme(settings: SettingsDocument): Record<string, string> {
-  const palettes: Record<ThemeId, Record<string, string>> = {
+  const palettes: Partial<Record<ThemeId, Record<string, string>>> = {
     ember: {
       background: "#090b0e",
       foreground: "#e8ecef",
@@ -2139,7 +2143,7 @@ function terminalTheme(settings: SettingsDocument): Record<string, string> {
       brightWhite: "#ffffff",
     },
   };
-  return palettes[settings.theme];
+  return palettes[settings.theme] ?? palettes.ember!;
 }
 
 function renderTerminalStatus(): void {
@@ -2323,22 +2327,17 @@ function refreshWorkspaceMetadata(): void {
 
 function completeOnboarding(choiceId: OnboardingChoiceId): void {
   selectedOnboardingChoice = choiceId;
+  onboardingStartup.value = choiceId === "plain" ? "terminal" : "launchpad";
   saveOnboardingPreferences();
   closeOnboarding();
   refreshWorkspaceMetadata();
 
   switch (choiceId) {
-    case "store":
+    case "custom":
       openStore("");
       break;
-    case "apps":
-      openMyApps();
-      break;
-    case "agent":
-      openAgentCockpit();
-      break;
-    case "restore":
-      void loadWorkspaceOnStartup();
+    case "quick":
+      openLaunchpad();
       break;
     default:
       void startSession();
@@ -2367,7 +2366,7 @@ function openOnboarding(): void {
   status.textContent = "onboarding";
   status.dataset.state = "ready";
   onboardingStartup.value = startupBehavior;
-  selectedOnboardingChoice = "terminal";
+  selectedOnboardingChoice = "quick";
   renderOnboardingChoices(true);
 }
 
@@ -7066,6 +7065,7 @@ async function launchTarget(
   let sessionAccepted = false;
   let taskClaimed = false;
   let launchedSessionId: string | undefined;
+  const returnTabId = frameSnapshot.activeTabId;
   output.onmessage = (chunk) => {
     if (sessionAccepted && outputSessionId) {
       writeToPane(outputSessionId, chunk);
@@ -7090,6 +7090,7 @@ async function launchTarget(
     const nextSnapshot = await invoke<FrameSnapshot>("frame_attach_session", {
       session: nextSession,
     });
+    launchedReturnTabs.set(nextSession.id, returnTabId);
     renderFrame(nextSnapshot);
     if (context?.agentTaskId) {
       const task = await invoke<AgentTask>("agent_task_claim", {
@@ -9141,7 +9142,7 @@ window.addEventListener("keydown", (event) => {
     } else if (event.key === "Enter") {
       completeOnboarding(selectedOnboardingChoice);
     } else if (event.key === "Escape") {
-      completeOnboarding("terminal");
+      completeOnboarding("plain");
     }
     return;
   }
@@ -9204,6 +9205,36 @@ void listen<SessionExited>("session-exited", (event) => {
     .catch(() => {
       // The terminal exit remains visible even if supervision metadata cannot be updated.
     });
+  if (launchedReturnTabs.has(event.payload.id)) {
+    const returnTabId = launchedReturnTabs.get(event.payload.id) ?? null;
+    launchedReturnTabs.delete(event.payload.id);
+    const launchedTab = frameSnapshot.tabs.find((tab) =>
+      tab.panes.some((pane) => pane.session.id === event.payload.id),
+    );
+    if (launchedTab) {
+      void invoke<FrameCloseResult>("frame_close_tab", {
+        tabId: launchedTab.id,
+        force: true,
+      }).then(async (result) => {
+        let nextSnapshot = result.snapshot;
+        if (returnTabId && nextSnapshot.tabs.some((tab) => tab.id === returnTabId)) {
+          nextSnapshot = await invoke<FrameSnapshot>("frame_activate_tab", { tabId: returnTabId });
+        }
+        renderFrame(nextSnapshot);
+        closeSurface();
+        if (nextSnapshot.tabs.length === 0) {
+          terminalStarted = false;
+          await startSession();
+        }
+      }).catch(() => {
+        writeToPane(
+          event.payload.id,
+          new TextEncoder().encode("\r\n\u001b[90m[tool exited; press Leader to switch sessions]\u001b[0m\r\n"),
+        );
+      });
+    }
+    return;
+  }
   if (!paneForSession(event.payload.id)) {
     return;
   }

@@ -2,6 +2,7 @@ use crate::catalog::{
     CatalogCategory, CatalogManifest, CatalogRuntime, DataLocation, Detection, InstallMethod,
     OptionalEnhancement, Prerequisite, PrerequisiteCheck, PrivilegeRequirement, SourceReference,
 };
+use crate::storage::AppData;
 use serde::{Deserialize, Serialize};
 use std::{
     cmp::Ordering,
@@ -12,7 +13,8 @@ use std::{
     sync::Mutex,
     time::{SystemTime, UNIX_EPOCH},
 };
-use tauri::{AppHandle, Manager};
+#[cfg(feature = "desktop")]
+use tauri::AppHandle;
 
 const RECEIPT_FILE_NAME: &str = "install-receipts.json";
 const RECEIPT_SCHEMA_VERSION: u32 = 1;
@@ -255,7 +257,7 @@ trait OperationAdapter {
 }
 
 struct SystemOperationAdapter<'a> {
-    app: &'a AppHandle,
+    app: &'a dyn AppData,
     catalog: &'a CatalogRuntime,
     installer: &'a InstallRuntime,
 }
@@ -394,7 +396,7 @@ impl InstallRuntime {
 
     pub fn execute(
         &self,
-        app: &AppHandle,
+        app: &dyn AppData,
         catalog: &CatalogRuntime,
         request: InstallRequest,
     ) -> Result<InstallOutcome, String> {
@@ -408,7 +410,7 @@ impl InstallRuntime {
 
     pub fn list_my_apps(
         &self,
-        app: &AppHandle,
+        app: &dyn AppData,
         catalog: &CatalogRuntime,
     ) -> Result<MyAppsSnapshot, String> {
         let adapter = SystemOperationAdapter {
@@ -421,7 +423,7 @@ impl InstallRuntime {
 
     pub fn management_plan(
         &self,
-        app: &AppHandle,
+        app: &dyn AppData,
         catalog: &CatalogRuntime,
         manifest_id: &str,
         operation: ManagementOperation,
@@ -449,7 +451,7 @@ impl InstallRuntime {
 
     pub fn execute_management(
         &self,
-        app: &AppHandle,
+        app: &dyn AppData,
         catalog: &CatalogRuntime,
         request: ManagementRequest,
     ) -> Result<InstallOutcome, String> {
@@ -489,7 +491,7 @@ impl InstallRuntime {
         self.execute_data_cleanup(app, &plan, receipt)
     }
 
-    pub fn receipts(&self, app: &AppHandle) -> Result<Vec<InstallReceipt>, String> {
+    pub fn receipts(&self, app: &dyn AppData) -> Result<Vec<InstallReceipt>, String> {
         let _guard = self
             .receipt_lock
             .lock()
@@ -497,7 +499,7 @@ impl InstallRuntime {
         read_receipts(app)
     }
 
-    fn record_receipt(&self, app: &AppHandle, receipt: InstallReceipt) -> Result<(), String> {
+    fn record_receipt(&self, app: &dyn AppData, receipt: InstallReceipt) -> Result<(), String> {
         let _guard = self
             .receipt_lock
             .lock()
@@ -510,7 +512,7 @@ impl InstallRuntime {
 
     fn remove_receipt(
         &self,
-        app: &AppHandle,
+        app: &dyn AppData,
         manifest_id: &str,
     ) -> Result<Option<InstallReceipt>, String> {
         let _guard = self
@@ -531,7 +533,7 @@ impl InstallRuntime {
 
     fn execute_data_cleanup(
         &self,
-        _app: &AppHandle,
+        _app: &dyn AppData,
         plan: &ManagementPlan,
         receipt: Option<InstallReceipt>,
     ) -> Result<InstallOutcome, String> {
@@ -1082,6 +1084,7 @@ fn execute_management_with_adapter(
     }
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command(rename_all = "camelCase")]
 pub fn install_plan(
     catalog: tauri::State<'_, CatalogRuntime>,
@@ -1094,6 +1097,7 @@ pub fn install_plan(
     InstallRuntime::build_plan(&manifest, method_id.as_deref())
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command(rename_all = "camelCase")]
 pub fn install_execute(
     app: AppHandle,
@@ -1104,6 +1108,7 @@ pub fn install_execute(
     installer.execute(&app, &catalog, request)
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command(rename_all = "camelCase")]
 pub fn install_receipts(
     app: AppHandle,
@@ -1112,6 +1117,7 @@ pub fn install_receipts(
     installer.receipts(&app)
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command(rename_all = "camelCase")]
 pub fn my_apps_list(
     app: AppHandle,
@@ -1170,6 +1176,7 @@ fn my_apps_snapshot_with_adapter(
     })
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command(rename_all = "camelCase")]
 pub fn app_management_plan(
     app: AppHandle,
@@ -1188,6 +1195,7 @@ pub fn app_management_plan(
     )
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command(rename_all = "camelCase")]
 pub fn app_management_execute(
     app: AppHandle,
@@ -1782,7 +1790,7 @@ fn prerequisite_is_available(check: &PrerequisiteCheck) -> bool {
 
 fn prerequisite_check_matches(check: &PrerequisiteCheck, result: &CommandResult) -> bool {
     result.success
-        && check.stdout_contains.as_ref().map_or(true, |marker| {
+        && check.stdout_contains.as_ref().is_none_or(|marker| {
             result
                 .stdout
                 .to_ascii_lowercase()
@@ -1879,14 +1887,13 @@ fn timestamp() -> String {
         .unwrap_or_else(|_| "unknown".to_owned())
 }
 
-fn receipt_path(app: &AppHandle) -> Result<PathBuf, String> {
-    app.path()
-        .app_data_dir()
+fn receipt_path(app: &dyn AppData) -> Result<PathBuf, String> {
+    app.data_directory()
         .map(|directory| directory.join(RECEIPT_FILE_NAME))
         .map_err(|error| format!("could not resolve Arkonad app data directory: {error}"))
 }
 
-fn read_receipts(app: &AppHandle) -> Result<Vec<InstallReceipt>, String> {
+fn read_receipts(app: &dyn AppData) -> Result<Vec<InstallReceipt>, String> {
     let path = receipt_path(app)?;
     match fs::read_to_string(&path) {
         Ok(contents) => parse_receipt_store(&contents),
@@ -1895,7 +1902,7 @@ fn read_receipts(app: &AppHandle) -> Result<Vec<InstallReceipt>, String> {
     }
 }
 
-fn write_receipts(app: &AppHandle, receipts: &[InstallReceipt]) -> Result<(), String> {
+fn write_receipts(app: &dyn AppData, receipts: &[InstallReceipt]) -> Result<(), String> {
     let path = receipt_path(app)?;
     if let Some(directory) = path.parent() {
         fs::create_dir_all(directory)

@@ -1,0 +1,25 @@
+pub mod catalog;
+pub mod executable;
+pub mod installer;
+pub mod settings;
+pub mod storage;
+pub mod tui;
+
+#[cfg(feature = "desktop")]
+pub mod agent;
+#[cfg(feature = "desktop")]
+pub mod frame;
+#[cfg(feature = "desktop")]
+pub mod integration;
+#[cfg(feature = "desktop")]
+pub mod launcher;
+#[cfg(feature = "desktop")]
+pub mod pty;
+#[cfg(feature = "desktop")]
+pub mod release;
+#[cfg(feature = "desktop")]
+pub mod repository;
+#[cfg(feature = "desktop")]
+pub mod task;
+#[cfg(feature = "desktop")]
+pub mod workspace;

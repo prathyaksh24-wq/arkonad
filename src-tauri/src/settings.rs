@@ -1,9 +1,11 @@
+use crate::storage::AppData;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::fs;
 use std::path::PathBuf;
 use std::sync::Mutex;
-use tauri::{AppHandle, Manager, State};
+#[cfg(feature = "desktop")]
+use tauri::{AppHandle, State};
 
 const SETTINGS_FILE_NAME: &str = "settings.json";
 const CURRENT_SCHEMA_VERSION: u32 = 1;
@@ -31,6 +33,8 @@ pub struct SettingsDocument {
     pub shell_profiles: Vec<ShellProfile>,
     #[serde(default = "default_theme")]
     pub theme: String,
+    #[serde(default = "default_pet")]
+    pub pet: String,
     #[serde(default = "default_motion")]
     pub motion: String,
     #[serde(default = "default_transparency")]
@@ -79,7 +83,7 @@ pub struct SettingsRuntime {
 }
 
 impl SettingsRuntime {
-    pub fn load(&self, app: &AppHandle) -> SettingsLoadResult {
+    pub fn load(&self, app: &dyn AppData) -> SettingsLoadResult {
         let _guard = match self.state_lock.lock() {
             Ok(guard) => guard,
             Err(_) => {
@@ -108,7 +112,7 @@ impl SettingsRuntime {
 
     pub fn save(
         &self,
-        app: &AppHandle,
+        app: &dyn AppData,
         request: SettingsSaveRequest,
     ) -> Result<SettingsDocument, String> {
         validate_settings(&request.settings)?;
@@ -144,7 +148,7 @@ impl SettingsRuntime {
 
     pub fn import(
         &self,
-        app: &AppHandle,
+        app: &dyn AppData,
         request: SettingsImportRequest,
     ) -> Result<SettingsDocument, String> {
         let settings = parse_settings(&request.contents)
@@ -158,18 +162,20 @@ impl SettingsRuntime {
         Ok(settings)
     }
 
-    pub fn export(&self, app: &AppHandle) -> Result<String, String> {
+    pub fn export(&self, app: &dyn AppData) -> Result<String, String> {
         let result = self.load(app);
         serde_json::to_string_pretty(&result.settings)
             .map_err(|error| format!("could not encode settings: {error}"))
     }
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command(rename_all = "camelCase")]
 pub fn settings_load(app: AppHandle, state: State<'_, SettingsRuntime>) -> SettingsLoadResult {
     state.load(&app)
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command(rename_all = "camelCase")]
 pub fn settings_save(
     app: AppHandle,
@@ -179,6 +185,7 @@ pub fn settings_save(
     state.save(&app, request)
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command(rename_all = "camelCase")]
 pub fn settings_validate(
     state: State<'_, SettingsRuntime>,
@@ -187,6 +194,7 @@ pub fn settings_validate(
     state.validate(contents)
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command(rename_all = "camelCase")]
 pub fn settings_import(
     app: AppHandle,
@@ -196,6 +204,7 @@ pub fn settings_import(
     state.import(&app, request)
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command(rename_all = "camelCase")]
 pub fn settings_export(
     app: AppHandle,
@@ -229,8 +238,14 @@ fn validate_settings(settings: &SettingsDocument) -> Result<(), String> {
             settings.startup_surface
         ));
     }
-    if !matches!(settings.theme.as_str(), "ember" | "midnight" | "carbon") {
+    if !matches!(
+        settings.theme.as_str(),
+        "ember" | "midnight" | "carbon" | "amber" | "phosphor" | "gruvbox" | "dracula" | "google84"
+    ) {
         return Err(format!("theme is not supported: {}", settings.theme));
+    }
+    if !matches!(settings.pet.as_str(), "none" | "gengar" | "snorlax") {
+        return Err(format!("pet is not supported: {}", settings.pet));
     }
     if !matches!(settings.motion.as_str(), "system" | "reduced" | "full") {
         return Err(format!("motion is not supported: {}", settings.motion));
@@ -282,7 +297,7 @@ fn validate_settings(settings: &SettingsDocument) -> Result<(), String> {
     Ok(())
 }
 
-fn read_settings(app: &AppHandle) -> Result<Option<SettingsDocument>, String> {
+fn read_settings(app: &dyn AppData) -> Result<Option<SettingsDocument>, String> {
     let path = settings_path(app)?;
     match fs::read_to_string(&path) {
         Ok(contents) => {
@@ -296,7 +311,7 @@ fn read_settings(app: &AppHandle) -> Result<Option<SettingsDocument>, String> {
     }
 }
 
-fn write_settings(app: &AppHandle, settings: &SettingsDocument) -> Result<(), String> {
+fn write_settings(app: &dyn AppData, settings: &SettingsDocument) -> Result<(), String> {
     let path = settings_path(app)?;
     if let Some(directory) = path.parent() {
         fs::create_dir_all(directory)
@@ -320,9 +335,8 @@ fn write_settings(app: &AppHandle, settings: &SettingsDocument) -> Result<(), St
     Ok(())
 }
 
-fn settings_path(app: &AppHandle) -> Result<PathBuf, String> {
-    app.path()
-        .app_data_dir()
+fn settings_path(app: &dyn AppData) -> Result<PathBuf, String> {
+    app.data_directory()
         .map(|directory| directory.join(SETTINGS_FILE_NAME))
         .map_err(|error| format!("could not resolve Arkonad app data directory: {error}"))
 }
@@ -343,6 +357,7 @@ fn default_settings() -> SettingsDocument {
         default_shell_profile_id: default_shell_profile_id(),
         shell_profiles: default_shell_profiles(),
         theme: default_theme(),
+        pet: default_pet(),
         motion: default_motion(),
         transparency: default_transparency(),
         font_scale: default_font_scale(),
@@ -361,13 +376,14 @@ fn default_leader_chord() -> String {
 }
 
 fn default_startup_surface() -> String {
-    "terminal".to_owned()
+    "launchpad".to_owned()
 }
 
 fn default_shell_profile_id() -> String {
     "auto".to_owned()
 }
 
+#[cfg(windows)]
 fn default_shell_profiles() -> Vec<ShellProfile> {
     vec![
         ShellProfile {
@@ -398,8 +414,31 @@ fn default_shell_profiles() -> Vec<ShellProfile> {
     ]
 }
 
+#[cfg(not(windows))]
+fn default_shell_profiles() -> Vec<ShellProfile> {
+    let mut profiles = vec![ShellProfile {
+        id: "auto".into(),
+        label: "System default".into(),
+        executable: None,
+    }];
+    profiles.extend(
+        ["bash", "zsh", "fish", "sh"]
+            .into_iter()
+            .map(|shell| ShellProfile {
+                id: shell.into(),
+                label: shell.into(),
+                executable: Some(shell.into()),
+            }),
+    );
+    profiles
+}
+
 fn default_theme() -> String {
-    "ember".to_owned()
+    "amber".to_owned()
+}
+
+fn default_pet() -> String {
+    "none".to_owned()
 }
 
 fn default_motion() -> String {
@@ -430,8 +469,10 @@ mod tests {
     fn default_settings_are_valid_and_terminal_safe() {
         let settings = default_settings();
         validate_settings(&settings).expect("defaults should pass validation");
+        assert_eq!(settings.startup_surface, "launchpad");
         assert_eq!(settings.default_shell_profile_id, "auto");
         assert_eq!(settings.app_update_policy, "review");
+        assert_eq!(settings.pet, "none");
     }
 
     #[test]
@@ -445,6 +486,11 @@ mod tests {
         settings.default_shell_profile_id = "missing".to_owned();
         let error = validate_settings(&settings).expect_err("unknown shell profile must fail");
         assert!(error.contains("defaultShellProfileId"));
+
+        settings = default_settings();
+        settings.pet = "cloud-cat".to_owned();
+        let error = validate_settings(&settings).expect_err("unknown pet must fail");
+        assert!(error.contains("pet"));
     }
 
     #[test]

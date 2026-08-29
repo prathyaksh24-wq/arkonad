@@ -1,56 +1,22 @@
 import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
-
-const root = resolve(import.meta.dirname, "..");
-const read = (path) => readFileSync(resolve(root, path), "utf8");
-const config = JSON.parse(read("src-tauri/tauri.conf.json"));
-const manifests = JSON.parse(read("src-tauri/catalog/manifests.json"));
+const read = path => readFileSync(new URL("../" + path, import.meta.url), "utf8");
 const workflow = read(".github/workflows/release-windows.yml");
-const docs = read("docs/release/windows-first-release.md");
-const release = read("src-tauri/src/release.rs");
 const installer = read("src-tauri/src/installer.rs");
-const smoke = read("scripts/windows-release-smoke.ps1");
-const packageJson = JSON.parse(read("package.json"));
-
+const manifests = JSON.parse(read("src-tauri/catalog/manifests.json"));
+const docs = read("docs/terminal-native.md");
 const checks = [
-  ["Tauri bundles are active", config.bundle?.active === true],
-  ["NSIS and MSI targets are configured", ["nsis", "msi"].every((target) => config.bundle?.targets?.includes(target))],
-  ["Per-user NSIS installation is configured", config.bundle?.windows?.nsis?.installMode === "currentUser"],
-  ["Downgrades are not silent", config.bundle?.windows?.allowDowngrades === false],
-  ["Release workflow requires a signing certificate", workflow.includes("WINDOWS_CERTIFICATE_BASE64")],
-  ["Release workflow signs with signtool", workflow.includes("signtool.exe") && workflow.includes("/fd SHA256")],
-  ["Release workflow verifies signed artifacts", workflow.includes("verify-windows-release.ps1 -BundleRoot")],
-  ["Windows smoke harness covers installer lifecycle", ["CleanInstall", "Upgrade", "Repair", "Uninstall"].every((scenario) => smoke.includes(scenario))],
-  ["Release data has a migration entry point", release.includes("pub fn prepare") && release.includes("DATA_FILE_NAMES")],
-  ["Release data has an explicit rollback entry point", release.includes("pub fn restore_last_backup")],
-  ["Receipt storage accepts the legacy format", installer.includes("if value.is_array()")],
-  ["Release documentation covers the required scenarios", [
-    "Clean install",
-    "Upgrade",
-    "Uninstall",
-    "shell-only onboarding",
-    "Store browsing",
-    "app install, manage, and launch",
-    "Agent Task",
-    "Workspace recovery",
-    "disabled network",
-  ].every((text) => docs.includes(text))],
-  ["Release documentation covers update and privacy boundaries", [
-    "notify",
-    "review",
-    "install",
-    "Store listing",
-    "Verified Compatibility",
-    "third-party app data",
-  ].every((text) => docs.includes(text))],
-  ["Every bundled manifest declares a schema", Array.isArray(manifests) && manifests.length > 0 && manifests.every((manifest) => manifest.schemaVersion === 1)],
-  ["Release contract is runnable from package scripts", packageJson.scripts?.["test:release"] === "node scripts/verify-release-contract.mjs"],
+  [workflow.includes("--bin arkonad --target") && !workflow.includes("tauri build"), "release builds native executable"],
+  [["windows-latest", "ubuntu-24.04", "ubuntu-24.04-arm", "macos-15-intel", "macos-latest"].every(s => workflow.includes(s)), "platform runners"],
+  [["x86_64-pc-windows-msvc", "aarch64-pc-windows-msvc", "x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu", "x86_64-apple-darwin", "aarch64-apple-darwin"].every(s => workflow.includes(s)), "six architecture targets"],
+  [workflow.includes("WINDOWS_CERTIFICATE_BASE64") && workflow.includes("signtool.exe") && workflow.includes("Get-AuthenticodeSignature"), "signed Windows binaries"],
+  [workflow.includes("notarytool submit") && workflow.includes('test "$status" = Accepted'), "macOS notarization must be accepted"],
+  [workflow.includes(".sha256") && workflow.includes("Get-FileHash"), "checksums published"],
+  [workflow.includes("--draft --verify-tag"), "manual release QA before publication"],
+  [workflow.includes("cargo test --locked") && workflow.includes("--features desktop --lib"), "native and retained desktop tests"],
+  [installer.includes("if value.is_array()"), "legacy receipts remain readable"],
+  [manifests.every(m => m.schemaVersion === 1), "manifest schema unchanged"],
+  [docs.includes("have not yet been ported") && docs.includes("publish the first native release"), "migration and distribution limits documented"],
 ];
-
-const failures = checks.filter(([, passed]) => !passed).map(([name]) => name);
-if (failures.length > 0) {
-  console.error(`Release contract checks failed:\n- ${failures.join("\n- ")}`);
-  process.exitCode = 1;
-} else {
-  console.log(`Release contract checks passed (${checks.length} contracts).`);
-}
+const failures = checks.filter(([passed]) => !passed).map(([, message]) => message);
+if (failures.length) { console.error(failures.join("\n")); process.exit(1); }
+console.log(`Native release source contract passed (${checks.length} checks).`);

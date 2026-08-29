@@ -3,9 +3,10 @@
   "productName": "Arkonad",
   "version": "0.1.0",
   "identifier": "ai.arkonad.terminal",
+  "mainBinaryName": "arkonad-desktop",
   "build": {
-    "beforeDevCommand": "pnpm dev",
-    "beforeBuildCommand": "pnpm build",
+    "beforeDevCommand": "pnpm desktop:web",
+    "beforeBuildCommand": "pnpm desktop:build",
     "devUrl": "http://127.0.0.1:1420",
     "frontendDist": "../dist"
   },

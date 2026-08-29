@@ -5,13 +5,19 @@
   "type": "module",
   "packageManager": "pnpm@9.15.9",
   "scripts": {
-    "dev": "vite --host 127.0.0.1",
-    "build": "tsc --noEmit && vite build",
+    "dev": "node scripts/run-native.mjs dev",
+    "build": "node scripts/run-native.mjs build",
+    "test": "node scripts/run-native.mjs test",
+    "desktop:web": "vite --host 127.0.0.1",
+    "desktop:build": "tsc --noEmit && vite build",
+    "desktop": "node scripts/run-native.mjs desktop",
     "test:accessibility": "node scripts/verify-settings-accessibility.mjs",
+    "test:bootstrap": "node scripts/verify-bootstrap-installers.mjs",
+    "test:terminal-ui": "node scripts/verify-terminal-native-ui.mjs",
     "test:release": "node scripts/verify-release-contract.mjs",
     "tauri": "tauri",
-    "tauri:dev": "tauri dev",
-    "tauri:build": "tauri build"
+    "tauri:dev": "tauri dev --features desktop",
+    "tauri:build": "tauri build --features desktop"
   },
   "dependencies": {
     "@tauri-apps/api": "2.11.1",
