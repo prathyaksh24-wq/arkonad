@@ -480,13 +480,12 @@ fn resolve_shell(requested: Option<&str>) -> Result<ShellProfile, String> {
         .or_else(|| env::var("ARKONAD_SHELL").ok());
 
     if let Some(executable) = requested.as_deref() {
-        if !command_exists(executable) {
-            return Err(format!("configured shell was not found: {executable}"));
-        }
+        let resolved = crate::executable::resolve(executable)
+            .ok_or_else(|| format!("configured shell was not found: {executable}"))?;
         return Ok(ShellProfile {
-            is_powershell: is_powershell(executable),
+            is_powershell: is_powershell(&resolved),
             label: executable.to_string(),
-            executable: executable.to_string(),
+            executable: resolved,
         });
     }
 
@@ -506,10 +505,10 @@ fn resolve_shell(requested: Option<&str>) -> Result<ShellProfile, String> {
         } else {
             executable.to_string()
         };
-        if command_exists(&executable) {
+        if let Some(resolved) = crate::executable::resolve(&executable) {
             return Ok(ShellProfile {
-                is_powershell: is_powershell(&executable),
-                executable,
+                is_powershell: is_powershell(&resolved),
+                executable: resolved,
                 label: label.to_string(),
             });
         }
@@ -591,23 +590,6 @@ fn quote_posix_argument(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\\''"))
 }
 
-fn command_exists(command: &str) -> bool {
-    if Path::new(command).components().count() > 1 {
-        return Path::new(command).is_file();
-    }
-
-    #[cfg(windows)]
-    let lookup = "where.exe";
-    #[cfg(not(windows))]
-    let lookup = "which";
-
-    std::process::Command::new(lookup)
-        .arg(command)
-        .output()
-        .map(|output| output.status.success())
-        .unwrap_or(false)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -616,9 +598,9 @@ mod tests {
     use std::time::{Duration, Instant};
 
     fn powershell() -> Option<String> {
-        if command_exists("pwsh.exe") {
+        if crate::executable::resolve("pwsh.exe").is_some() {
             Some("pwsh.exe".to_string())
-        } else if command_exists("powershell.exe") {
+        } else if crate::executable::resolve("powershell.exe").is_some() {
             Some("powershell.exe".to_string())
         } else {
             None
@@ -706,11 +688,12 @@ mod tests {
             return;
         };
 
-        if command_exists("pwsh.exe") {
+        if crate::executable::resolve("pwsh.exe").is_some() {
             assert_eq!(shell.label, "PowerShell 7");
-        } else if command_exists("powershell.exe") {
+        } else if crate::executable::resolve("powershell.exe").is_some() {
             assert_eq!(shell.label, "Windows PowerShell");
         }
+        assert!(Path::new(&shell.executable).is_file());
     }
 
     #[test]

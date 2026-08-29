@@ -1,146 +1,151 @@
-name: Windows release
+name: Native terminal release
 
 on:
   push:
-    tags:
-      - "v*"
+    tags: ["v*"]
   workflow_dispatch:
 
 permissions:
   contents: write
 
 jobs:
-  release-contract:
-    name: Release contract and Rust tests
+  verify:
     runs-on: windows-latest
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
-        with:
-          version: 9.15.9
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-node@v4
         with:
           node-version: 22
-          cache: pnpm
+      - run: cargo test --locked --manifest-path src-tauri/Cargo.toml
+      - run: cargo test --locked --manifest-path src-tauri/Cargo.toml --features desktop --lib
+      - run: node scripts/verify-terminal-native-ui.mjs
+      - run: node scripts/verify-bootstrap-installers.mjs
+      - run: node scripts/verify-release-contract.mjs
+      - run: ./scripts/test-bootstrap.ps1
 
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Install JavaScript dependencies
-        run: pnpm install --frozen-lockfile
-
-      - name: Verify release contract
-        run: pnpm run test:release
-
-      - name: Build frontend
-        run: pnpm run build
-
-      - name: Run Rust release tests
-        run: cargo test --manifest-path src-tauri/Cargo.toml -- --nocapture
-
-  windows-bundle:
-    name: Build and sign Windows installers
-    needs: release-contract
-    runs-on: windows-latest
+  native:
+    needs: verify
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: windows-latest
+            platform: windows
+            architecture: x86_64
+            target: x86_64-pc-windows-msvc
+          - runner: windows-latest
+            platform: windows
+            architecture: aarch64
+            target: aarch64-pc-windows-msvc
+          - runner: ubuntu-24.04
+            platform: linux
+            architecture: x86_64
+            target: x86_64-unknown-linux-gnu
+          - runner: ubuntu-24.04-arm
+            platform: linux
+            architecture: aarch64
+            target: aarch64-unknown-linux-gnu
+          - runner: macos-15-intel
+            platform: macos
+            architecture: x86_64
+            target: x86_64-apple-darwin
+          - runner: macos-latest
+            platform: macos
+            architecture: aarch64
+            target: aarch64-apple-darwin
+    runs-on: ${{ matrix.runner }}
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
         with:
-          version: 9.15.9
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: pnpm
-
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Install JavaScript dependencies
-        run: pnpm install --frozen-lockfile
-
-      - name: Require Windows signing credentials
-        shell: powershell
+          targets: ${{ matrix.target }}
+      - name: Test on native runner
+        if: matrix.platform != 'windows' || matrix.architecture == 'x86_64'
+        run: cargo test --locked --manifest-path src-tauri/Cargo.toml
+      - name: Build terminal executable (no WebView)
+        run: cargo build --locked --release --manifest-path src-tauri/Cargo.toml --bin arkonad --target ${{ matrix.target }}
+      - name: Sign Windows executable
+        if: matrix.platform == 'windows'
+        shell: pwsh
         env:
           WINDOWS_CERTIFICATE_BASE64: ${{ secrets.WINDOWS_CERTIFICATE_BASE64 }}
           WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+          TARGET: ${{ matrix.target }}
         run: |
-          if ([string]::IsNullOrWhiteSpace($env:WINDOWS_CERTIFICATE_BASE64)) {
-            throw "WINDOWS_CERTIFICATE_BASE64 is required for a signed release."
-          }
-          if ([string]::IsNullOrWhiteSpace($env:WINDOWS_CERTIFICATE_PASSWORD)) {
-            throw "WINDOWS_CERTIFICATE_PASSWORD is required for a signed release."
-          }
-
-      - name: Decode signing certificate
-        shell: powershell
+          if (!$env:WINDOWS_CERTIFICATE_BASE64 -or !$env:WINDOWS_CERTIFICATE_PASSWORD) { throw "Windows signing credentials are required." }
+          $certificate = Join-Path $env:RUNNER_TEMP "arkonad-signing.pfx"
+          [IO.File]::WriteAllBytes($certificate, [Convert]::FromBase64String($env:WINDOWS_CERTIFICATE_BASE64))
+          $signtool = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin" -Filter signtool.exe -Recurse -File | Where-Object FullName -Match '\\x64\\' | Sort-Object FullName | Select-Object -Last 1
+          if (!$signtool) { throw "signtool.exe was not found." }
+          $binary = "src-tauri/target/$env:TARGET/release/arkonad.exe"
+          & $signtool.FullName sign /fd SHA256 /td SHA256 /tr http://timestamp.digicert.com /f $certificate /p $env:WINDOWS_CERTIFICATE_PASSWORD $binary
+          if ($LASTEXITCODE -ne 0) { throw "Signing failed." }
+          if ((Get-AuthenticodeSignature $binary).Status -ne "Valid") { throw "Signature verification failed." }
+      - name: Sign and notarize macOS executable
+        if: matrix.platform == 'macos'
+        shell: bash
         env:
-          WINDOWS_CERTIFICATE_BASE64: ${{ secrets.WINDOWS_CERTIFICATE_BASE64 }}
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          TARGET: ${{ matrix.target }}
         run: |
-          $certificatePath = Join-Path $env:RUNNER_TEMP "arkonad-signing.pfx"
-          [System.IO.File]::WriteAllBytes(
-            $certificatePath,
-            [System.Convert]::FromBase64String($env:WINDOWS_CERTIFICATE_BASE64)
-          )
-          "ARKONAD_CERTIFICATE_PATH=$certificatePath" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-
-      - name: Build Windows bundles
-        run: pnpm exec tauri build
-
-      - name: Sign and verify Windows bundles
-        shell: powershell
+          for name in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID; do
+            test -n "$(printenv "$name")" || { echo "$name is required." >&2; exit 1; }
+          done
+          keychain="$RUNNER_TEMP/arkonad-signing.keychain-db"
+          keychain_password="$(uuidgen)"
+          printf '%s' "$APPLE_CERTIFICATE" | base64 --decode > "$RUNNER_TEMP/arkonad-signing.p12"
+          security create-keychain -p "$keychain_password" "$keychain"
+          security unlock-keychain -p "$keychain_password" "$keychain"
+          security import "$RUNNER_TEMP/arkonad-signing.p12" -k "$keychain" -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$keychain_password" "$keychain"
+          binary="src-tauri/target/$TARGET/release/arkonad"
+          codesign --force --options runtime --timestamp --keychain "$keychain" --sign "$APPLE_SIGNING_IDENTITY" "$binary"
+          codesign --verify --strict "$binary"
+          ditto -c -k "$binary" "$RUNNER_TEMP/arkonad-notarize.zip"
+          xcrun notarytool submit "$RUNNER_TEMP/arkonad-notarize.zip" --apple-id "$APPLE_ID" --password "$APPLE_PASSWORD" --team-id "$APPLE_TEAM_ID" --wait --output-format json > "$RUNNER_TEMP/notarization.json"
+          status="$(plutil -extract status raw -o - "$RUNNER_TEMP/notarization.json")"
+          test "$status" = Accepted || { echo 'Notarization was not accepted.' >&2; exit 1; }
+      - name: Package native artifact and SHA256
+        shell: pwsh
         env:
-          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+          TARGET: ${{ matrix.target }}
+          PLATFORM: ${{ matrix.platform }}
+          ARCHITECTURE: ${{ matrix.architecture }}
         run: |
-          $signTool = Get-ChildItem `
-            -Path "${env:ProgramFiles(x86)}\Windows Kits\10\bin" `
-            -Filter signtool.exe `
-            -Recurse `
-            -File | Sort-Object FullName | Select-Object -Last 1
-          if ($null -eq $signTool) {
-            throw "signtool.exe was not found on the Windows runner."
-          }
-
-          $artifacts = Get-ChildItem -Path "src-tauri\target\release\bundle" -Recurse -File |
-            Where-Object { $_.Extension -in @(".exe", ".msi") }
-          if ($artifacts.Count -lt 2) {
-            throw "Both NSIS and MSI release artifacts are required."
-          }
-
-          foreach ($artifact in $artifacts) {
-            & $signTool.FullName sign /fd SHA256 /td SHA256 /tr "http://timestamp.digicert.com" /f $env:ARKONAD_CERTIFICATE_PATH /p $env:WINDOWS_CERTIFICATE_PASSWORD $artifact.FullName
-            if ($LASTEXITCODE -ne 0) {
-              throw "Signing failed for $($artifact.FullName)."
-            }
-          }
-
-      - name: Verify signed bundle contract
-        shell: powershell
-        run: .\scripts\verify-windows-release.ps1 -BundleRoot .\src-tauri\target\release\bundle -RequireSignature
-
-      - name: Upload Windows installers
-        uses: actions/upload-artifact@v4
+          $suffix = if ($env:PLATFORM -eq "windows") { ".exe" } else { "" }
+          $name = "arkonad-$env:PLATFORM-$env:ARCHITECTURE$suffix"
+          New-Item -ItemType Directory release-artifact -Force | Out-Null
+          Copy-Item "src-tauri/target/$env:TARGET/release/arkonad$suffix" "release-artifact/$name"
+          $hash = (Get-FileHash "release-artifact/$name" -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  $name" | Set-Content "release-artifact/$name.sha256" -Encoding ascii
+      - uses: actions/upload-artifact@v4
         with:
-          name: arkonad-windows-installers
-          path: src-tauri/target/release/bundle/**/*.{exe,msi}
+          name: arkonad-${{ matrix.platform }}-${{ matrix.architecture }}
+          path: release-artifact/*
           if-no-files-found: error
 
-      - name: Create GitHub release
-        if: startsWith(github.ref, 'refs/tags/')
+  draft-release:
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: native
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: release-artifacts
+          merge-multiple: true
+      - name: Create draft for native-terminal release QA
         env:
           GH_TOKEN: ${{ github.token }}
-        shell: powershell
+        shell: bash
         run: |
-          gh release create $env:GITHUB_REF_NAME --verify-tag --generate-notes
-          Get-ChildItem -Path "src-tauri\target\release\bundle" -Recurse -File |
-            Where-Object { $_.Extension -in @(".exe", ".msi") } |
-            ForEach-Object { gh release upload $env:GITHUB_REF_NAME $_.FullName --clobber }
+          gh release create "$GITHUB_REF_NAME" --draft --verify-tag --generate-notes
+          while IFS= read -r -d '' artifact; do
+            gh release upload "$GITHUB_REF_NAME" "$artifact"
+          done < <(find release-artifacts -type f -print0)

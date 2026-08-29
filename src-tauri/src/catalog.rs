@@ -1,12 +1,22 @@
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{HashMap, HashSet},
-    process::Command,
     sync::Mutex,
 };
 
 const MANIFEST_SCHEMA_VERSION: u32 = 1;
 const BUILTIN_MANIFESTS: &str = include_str!("../catalog/manifests.json");
+const AWESOME_TUI_AI: &str = include_str!("../catalog/awesome-tui-ai.json");
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct AwesomeTuiEntry {
+    id: String,
+    name: String,
+    repository: String,
+    command: String,
+    summary: String,
+}
 
 fn default_prerequisite_kind() -> String {
     "runtime".to_owned()
@@ -274,7 +284,7 @@ pub struct CatalogRuntime {
 
 impl CatalogRuntime {
     pub fn builtins() -> Self {
-        match Self::from_json(BUILTIN_MANIFESTS) {
+        match Self::from_builtin_sources(BUILTIN_MANIFESTS, AWESOME_TUI_AI) {
             Ok(runtime) => runtime,
             Err(error) => {
                 eprintln!("Arkonad catalog disabled: {error}");
@@ -286,10 +296,35 @@ impl CatalogRuntime {
         }
     }
 
+    #[cfg(test)]
     pub fn from_json(json: &str) -> Result<Self, String> {
         let manifests: Vec<CatalogManifest> =
             serde_json::from_str(json).map_err(|error| format!("invalid catalog JSON: {error}"))?;
 
+        Self::from_manifests(manifests)
+    }
+
+    fn from_builtin_sources(manifests_json: &str, awesome_json: &str) -> Result<Self, String> {
+        let mut manifests: Vec<CatalogManifest> = serde_json::from_str(manifests_json)
+            .map_err(|error| format!("invalid catalog JSON: {error}"))?;
+        let awesome_entries: Vec<AwesomeTuiEntry> = serde_json::from_str(awesome_json)
+            .map_err(|error| format!("invalid Awesome TUI JSON: {error}"))?;
+        let existing_ids = manifests
+            .iter()
+            .map(|manifest| manifest.id.clone())
+            .collect::<HashSet<_>>();
+
+        manifests.extend(
+            awesome_entries
+                .into_iter()
+                .filter(|entry| !existing_ids.contains(&entry.id))
+                .map(awesome_tui_manifest),
+        );
+
+        Self::from_manifests(manifests)
+    }
+
+    fn from_manifests(manifests: Vec<CatalogManifest>) -> Result<Self, String> {
         if manifests.is_empty() {
             return Err("catalog must contain at least one manifest".to_owned());
         }
@@ -323,7 +358,7 @@ impl CatalogRuntime {
             .cloned()
     }
 
-    pub(crate) fn list(
+    pub fn list(
         &self,
         query: Option<&str>,
         category: Option<&str>,
@@ -345,7 +380,7 @@ impl CatalogRuntime {
             .filter(|manifest| {
                 selected_category
                     .as_ref()
-                    .map_or(true, |category| category == &manifest.category)
+                    .is_none_or(|category| category == &manifest.category)
             })
             .filter(|manifest| {
                 let haystack = format!(
@@ -391,6 +426,85 @@ impl CatalogRuntime {
     }
 }
 
+fn awesome_tui_manifest(entry: AwesomeTuiEntry) -> CatalogManifest {
+    let source_url = format!("https://github.com/{}", entry.repository);
+    let publisher = entry
+        .repository
+        .split('/')
+        .next()
+        .unwrap_or("Awesome TUI publisher")
+        .to_owned();
+    CatalogManifest {
+        schema_version: MANIFEST_SCHEMA_VERSION,
+        id: entry.id,
+        name: entry.name,
+        summary: entry.summary,
+        category: CatalogCategory::Agent,
+        publisher,
+        license: "See publisher repository".to_owned(),
+        platforms: vec![Platform::Windows, Platform::Macos, Platform::Linux],
+        source: SourceReference {
+            kind: "awesome-tui-ai".to_owned(),
+            url: source_url.clone(),
+        },
+        last_metadata_refresh: "2026-08-25".to_owned(),
+        executable_detection: ExecutableDetection {
+            commands: vec![entry.command.clone()],
+        },
+        versions: VersionInfo {
+            latest: None,
+            supported: Vec::new(),
+            verified: Vec::new(),
+        },
+        install_methods: vec![InstallMethod {
+            id: "publisher".to_owned(),
+            label: "Open publisher install instructions".to_owned(),
+            kind: "manual".to_owned(),
+            source: source_url,
+            command: None,
+            package_id: None,
+            version: None,
+            privileges: PrivilegeRequirement::Unknown,
+            download_size_bytes: None,
+            affected_system_features: Vec::new(),
+            data_expectations: "Publisher-defined files and configuration; review the repository before installing.".to_owned(),
+            rollback_limits: "Arkonad cannot automatically remove a manually installed tool.".to_owned(),
+            verification_command: None,
+            update_command: None,
+            repair_command: None,
+            uninstall_command: None,
+        }],
+        prerequisites: Vec::new(),
+        launch_profiles: vec![LaunchProfile {
+            id: "default".to_owned(),
+            label: "Launch native TUI".to_owned(),
+            executable: entry.command,
+            arguments: Vec::new(),
+            shell: None,
+            working_directory: None,
+        }],
+        data_locations: vec![DataLocation {
+            kind: "publisher-defined".to_owned(),
+            path: "See publisher repository".to_owned(),
+            description: "The third-party tool owns its configuration and local data.".to_owned(),
+        }],
+        network_expectations: NetworkExpectations {
+            required: false,
+            summary: "Network behavior is publisher-defined and has not been verified by Arkonad.".to_owned(),
+            endpoints: Vec::new(),
+        },
+        optional_enhancements: Vec::new(),
+        declared_capabilities: vec![DeclaredCapability {
+            id: "native-terminal-ui".to_owned(),
+            label: "Native terminal UI".to_owned(),
+            description: "Runs as its own process inside an Arkonad PTY session.".to_owned(),
+        }],
+        verified_compatibility: Vec::new(),
+        managed_by_arkonad: false,
+    }
+}
+
+#[cfg(feature = "desktop")]
 #[tauri::command(rename_all = "camelCase")]
 pub fn catalog_list(
     state: tauri::State<'_, CatalogRuntime>,
@@ -400,6 +514,7 @@ pub fn catalog_list(
     state.list(query.as_deref(), category.as_deref())
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command(rename_all = "camelCase")]
 pub fn catalog_detect(state: tauri::State<'_, CatalogRuntime>) -> Result<Vec<Detection>, String> {
     state.detect()
@@ -879,7 +994,7 @@ fn detect_manifest(manifest: &CatalogManifest) -> Option<Detection> {
         .commands
         .iter()
         .find_map(|command| {
-            find_executable(command).map(|path| Detection {
+            crate::executable::resolve(command).map(|path| Detection {
                 manifest_id: manifest.id.clone(),
                 command: command.clone(),
                 path,
@@ -887,19 +1002,6 @@ fn detect_manifest(manifest: &CatalogManifest) -> Option<Detection> {
                 version: None,
             })
         })
-}
-
-fn find_executable(command: &str) -> Option<String> {
-    let resolver = if cfg!(windows) { "where.exe" } else { "which" };
-    let output = Command::new(resolver).arg(command).output().ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    String::from_utf8_lossy(&output.stdout)
-        .lines()
-        .map(str::trim)
-        .find(|line| !line.is_empty() && !line.starts_with("INFO:"))
-        .map(ToOwned::to_owned)
 }
 
 fn statuses_for(manifest: &CatalogManifest, detection: Option<&Detection>) -> Vec<CatalogStatus> {
@@ -1019,6 +1121,25 @@ mod tests {
     use super::*;
 
     #[test]
+    fn builtin_catalog_contains_the_complete_awesome_tui_ai_list() {
+        let runtime = CatalogRuntime::from_builtin_sources(BUILTIN_MANIFESTS, AWESOME_TUI_AI)
+            .expect("builtin sources should load");
+        let entries = runtime.list(None, None).expect("catalog should list");
+        let awesome: Vec<AwesomeTuiEntry> =
+            serde_json::from_str(AWESOME_TUI_AI).expect("Awesome TUI source should parse");
+
+        assert_eq!(awesome.len(), 32);
+        assert_eq!(entries.len(), 36);
+        for item in awesome {
+            assert!(
+                entries.iter().any(|entry| entry.manifest.id == item.id),
+                "missing Awesome TUI entry {}",
+                item.id
+            );
+        }
+    }
+
+    #[test]
     fn rejects_an_untrusted_executable_value() {
         let mut value: serde_json::Value = serde_json::from_str(BUILTIN_MANIFESTS).unwrap();
         value[0]["executableDetection"]["commands"][0] =
@@ -1065,6 +1186,6 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn detects_a_windows_command_without_running_it() {
-        assert!(find_executable("cmd.exe").is_some());
+        assert!(crate::executable::resolve("cmd.exe").is_some());
     }
 }

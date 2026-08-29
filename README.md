@@ -2,13 +2,50 @@
 
 > The deepest fire, born of friction, that never goes out.
 
-An AI-native terminal for Windows. A blank, beautiful terminal emulator (Tauri v2 + ConPTY + xterm.js) that hosts an ecosystem of integrated CLI/TUI tools — a multi-agent cockpit for running codex, claude and opencode side-by-side, plus file manager, system monitor, cheatsheets, time-travel history, output filtering, and an AI sidecar.
+A terminal-native app store and launcher for Windows, macOS, and Linux. Arkonad runs inside your existing terminal using Ratatui/Crossterm. Choose a tool or open a real shell; exit the child to return to Arkonad.
 
-Windows only. Built for one person first: simpler terminals, multiple coding agents, cool and fun to look at.
+## Run the current source
+
+```sh
+cargo run --manifest-path src-tauri/Cargo.toml --bin arkonad
+```
+
+Use `-- store` to open the Store directly. On this checkout, `pnpm dev` also finds the Rust toolchain on D:. See [native UI, keys, and current limitations](docs/terminal-native.md).
+
+After the release build, this single line opens the current Windows executable
+from either PowerShell or Command Prompt:
+
+```cmd
+D:\Repos\arkonad\src-tauri\target\release\arkonad.exe
+```
+
+## Install
+
+These commands require a **published native release**. They will reject a legacy desktop-only release. Until the first native release is published, run the source above.
+
+PowerShell:
+
+```powershell
+irm https://raw.githubusercontent.com/prathyaksh24-wq/arkonad/main/install.ps1 | iex
+```
+
+Windows Command Prompt:
+
+```cmd
+powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/prathyaksh24-wq/arkonad/main/install.ps1 | iex"
+```
+
+macOS or Linux:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/prathyaksh24-wq/arkonad/main/install.sh | sh
+```
+
+Open a new terminal after installation and type `arkonad`. The shorter `arkond` spelling is installed as an alias.
 
 ## Status
 
-In planning. Tracked on the [wayfinder map](https://github.com/prathyaksh24-wq/arkonad/issues/1).
+In active development. Tracked on the [wayfinder map](https://github.com/prathyaksh24-wq/arkonad/issues/1).
 
 ## Design research
 

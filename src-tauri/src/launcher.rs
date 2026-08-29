@@ -7,7 +7,6 @@ use std::collections::{BTreeMap, HashMap};
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::ipc::Channel;
@@ -860,23 +859,7 @@ fn workspace_slug(name: &str) -> Result<String, String> {
 }
 
 fn resolve_executable(value: &str) -> Option<String> {
-    let value = value.trim();
-    if value.is_empty() {
-        return None;
-    }
-    if Path::new(value).components().count() > 1 {
-        return Path::new(value).is_file().then(|| value.to_owned());
-    }
-    let resolver = if cfg!(windows) { "where.exe" } else { "which" };
-    let output = Command::new(resolver).arg(value).output().ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    String::from_utf8_lossy(&output.stdout)
-        .lines()
-        .map(str::trim)
-        .find(|line| !line.is_empty() && !line.starts_with("INFO:"))
-        .map(ToOwned::to_owned)
+    crate::executable::resolve(value)
 }
 
 fn read_state(app: &AppHandle) -> Result<LauncherState, String> {
